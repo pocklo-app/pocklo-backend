@@ -3,6 +3,7 @@ import hashlib
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+import pyotp
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -11,7 +12,7 @@ from Resource.models import Resource, Share
 from Resource.validators import RtypeChoice, StypeChoice
 from User.models import User
 
-from .models import Application
+from .models import AdminAccount, Application
 from .provider import digest
 
 
@@ -67,7 +68,8 @@ class ProviderTests(TestCase):
     def consent(self, app, scope='files.read', approve=True):
         begin = self.begin(app, scope)
         self.assertEqual(begin.status_code, 302, begin.content)
-        path = BASE + 'requests/' + begin.url.rsplit('/', 1)[-1] + '/'
+        request_id = parse_qs(urlsplit(begin.url).query)['request'][0]
+        path = BASE + 'requests/' + request_id + '/'
         preview = self.client.get(path, **self.login(self.owner))
         self.assertEqual(preview.status_code, 200, preview.content)
         payload = {'approve': approve, 'permission_version': preview.json()['permission_version']}
@@ -133,9 +135,12 @@ class ProviderTests(TestCase):
         self.assertEqual(self.begin(app, scope).status_code, 403)
         url = BASE + f'admin/applications/{client_id}/'
         data = {'action': 'approve', 'confirmed': True, 'revision': 1}
-        with override_settings(POCKLO_OAUTH_ADMIN_USER_IDS={self.owner.pk}):
-            self.assertEqual(self.client.put(url, data, content_type='application/json', **self.login(self.other)).status_code, 403)
-            self.assertEqual(self.client.put(url, data, content_type='application/json', **self.login(self.owner)).status_code, 200)
+        self.assertEqual(self.client.put(url, data, content_type='application/json', **self.login(self.owner)).status_code, 401)
+        token = 'x' * 43
+        AdminAccount.objects.create(email='reviewer@example.com', session_hash=digest(token), verified_at=timezone.now())
+        with override_settings(POCKLO_OAUTH_ADMIN_EMAILS={'reviewer@example.com'}):
+            self.assertEqual(self.client.put(url, data, content_type='application/json',
+                                             **self.bearer({'access_token': token})).status_code, 200)
         tokens = self.exchange(app, self.consent(app, scope)['code'][0]).json()
         auth = {**self.bearer(tokens), 'HTTP_IDEMPOTENCY_KEY': 'one-share'}
         payload = {'resource_id': self.file.res_str_id}
@@ -163,3 +168,39 @@ class ProviderTests(TestCase):
         self.assertTrue(status.json()['active'])
         self.assertEqual(self.refresh(app, current['refresh_token']).status_code, 400)
         self.assertEqual(self.client.get(BASE + 'files/', **self.bearer(tokens)).status_code, 401)
+
+
+@override_settings(POCKLO_OAUTH_ADMIN_EMAILS={'reviewer@example.com'})
+@patch('Base.common.SECRET_KEY', 'isolated-pocklo-admin-test-signing-key')
+class AdminLoginTests(TestCase):
+    email = 'reviewer@example.com'
+
+    def post(self, route, data, token=None):
+        headers = {'HTTP_AUTHORIZATION': 'Bearer ' + token} if token else {}
+        return self.client.post(BASE + 'admin/' + route, data, content_type='application/json', **headers)
+
+    @patch('OAuth.admin.send_code')
+    def test_email_then_mfa_and_single_use_recovery(self, mail):
+        self.assertEqual(self.post('email-code/', {'email': 'outside@example.com'}).status_code, 200)
+        mail.assert_not_called()
+        self.assertEqual(self.post('email-code/', {'email': self.email}).status_code, 200)
+        code = mail.call_args.args[1]
+        email_login = {'email': self.email, 'method': 'email', 'code': code}
+        response = self.post('session/', email_login)
+        self.assertEqual(response.status_code, 200, response.content)
+        session = response.json()['token']
+        self.assertEqual(self.post('session/', email_login).status_code, 401)
+
+        setup = self.post('mfa/', {'action': 'setup'}, session).json()
+        totp = pyotp.TOTP(setup['secret'])
+        confirm = self.post('mfa/', {'action': 'confirm', 'code': totp.now()}, session)
+        self.assertEqual(confirm.status_code, 200, confirm.content)
+        recovery = confirm.json()['recovery_codes'][0]
+        self.assertNotIn(recovery, AdminAccount.objects.get(pk=self.email).recovery_hashes)
+        self.assertEqual(self.client.get(BASE + 'admin/session/',
+                                         HTTP_AUTHORIZATION='Bearer ' + session).status_code, 401)
+        self.assertEqual(self.post('session/', {'email': self.email, 'method': 'totp', 'code': totp.now()}).status_code, 401)
+        self.assertEqual(self.post('session/', email_login).status_code, 401)
+        recovery_login = {'email': self.email, 'method': 'recovery', 'code': recovery}
+        self.assertEqual(self.post('session/', recovery_login).status_code, 200)
+        self.assertEqual(self.post('session/', recovery_login).status_code, 401)

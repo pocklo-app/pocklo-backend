@@ -7,3 +7,5 @@ qiniu~=7.13.1
 django-cors-headers
 PyMySQL~=1.1.1
 diq~=0.1.1
+pyotp==2.10.0
+cryptography==46.0.7

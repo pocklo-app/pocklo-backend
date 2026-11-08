@@ -168,7 +168,7 @@ STATIC_URL = '/static/'
 
 # The developer platform uses existing Pocklo accounts for user consent.
 POCKLO_OAUTH_WEB_ORIGIN = os.getenv('POCKLO_OAUTH_WEB_ORIGIN', 'https://pocklo.jyonn.space').rstrip('/')
-POCKLO_OAUTH_ADMIN_USER_IDS = {
-    int(value.strip()) for value in os.getenv('POCKLO_OAUTH_ADMIN_USER_IDS', '').split(',')
+POCKLO_OAUTH_ADMIN_EMAILS = {
+    value.strip().lower() for value in os.getenv('POCKLO_OAUTH_ADMIN_EMAILS', 'i@6-79.cn').split(',')
     if value.strip()
 }

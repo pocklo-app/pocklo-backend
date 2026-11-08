@@ -21,7 +21,6 @@ from django.views import View
 from smartdjango import Error
 
 from Base.auth import Auth
-from Base.common import ADMIN_QITIAN
 from OAuth.models import Application, AuthorizationRequest, Credential, Grant, ShareCreation
 from Resource.models import Resource, Share
 from Resource.validators import RtypeChoice
@@ -138,13 +137,6 @@ def limit(bucket, key, maximum, seconds):
         raise OAuthError('rate_limit_exceeded', 429)
 
 
-def can_review(user):
-    configured = settings.POCKLO_OAUTH_ADMIN_USER_IDS
-    if configured:
-        return user.pk in configured
-    return bool(ADMIN_QITIAN and user.qt_user_app_id == ADMIN_QITIAN)
-
-
 def application_info(app, *, private=True):
     info = {'name': app.name, 'website': app.website, 'purpose': app.purpose}
     if private:
@@ -166,7 +158,6 @@ class Applications(ProviderView):
         return response({
             'applications': [application_info(app) for app in Application.objects.filter(
                 developer=request.user).order_by('name', 'pk')],
-            'can_review': can_review(request.user),
         })
 
     @account_required
@@ -220,48 +211,6 @@ class ApplicationSettings(ProviderView):
         return response({'application': application_info(app), **result})
 
 
-class AdminApplications(ProviderView):
-    @staticmethod
-    def require_admin(request):
-        if not can_review(request.user):
-            raise OAuthError('admin_required', 403)
-
-    @account_required
-    def get(self, request):
-        self.require_admin(request)
-        return response({'applications': [
-            {**application_info(app), 'developer_id': app.developer_id}
-            for app in Application.objects.order_by('name', 'pk')
-        ]})
-
-    @account_required
-    @transaction.atomic
-    def put(self, request, client_id):
-        self.require_admin(request)
-        app = Application.objects.select_for_update().filter(pk=client_id).first()
-        if not app:
-            raise OAuthError('application_not_found', 404)
-        data = body(request)
-        if type(data.get('revision')) is not int or data['revision'] != app.revision or data.get('confirmed') is not True:
-            raise OAuthError('application_changed', 409)
-        action = data.get('action')
-        reason = clean_string(data.get('reason', ''), 500, required=action == 'reject')
-        if action in ('approve', 'reject') and app.review == 'pending':
-            app.review = 'approved' if action == 'approve' else 'rejected'
-            app.review_reason = reason
-        elif action == 'revoke_sharing' and app.review == 'approved':
-            app.review, app.review_reason = 'revoked', reason
-        elif action == 'disable' and app.enabled:
-            app.enabled = False
-        elif action == 'enable' and not app.enabled:
-            app.enabled = True
-        else:
-            raise OAuthError('invalid_action')
-        app.revision += 1
-        app.save()
-        return response({'application': {**application_info(app), 'developer_id': app.developer_id}})
-
-
 class AuthorizationStart(ProviderView):
     def get(self, request):
         if any(len(values) != 1 for _, values in request.GET.lists()):
@@ -289,7 +238,7 @@ class AuthorizationStart(ProviderView):
             application=app, redirect_uri=uri, scope=scope, revision=app.revision,
             state=state, challenge=challenge, expires_at=timezone.now() + timedelta(seconds=REQUEST_TTL),
         )
-        return HttpResponseRedirect(f'{settings.POCKLO_OAUTH_WEB_ORIGIN}/oauth/authorize/{item.pk}')
+        return HttpResponseRedirect(f'{settings.POCKLO_OAUTH_WEB_ORIGIN}/oauth/authorize/?request={item.pk}')
 
 
 def callback(item, **params):

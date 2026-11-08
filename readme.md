@@ -30,9 +30,12 @@ Pocklo acts as the authorization server for third-party file access. The existin
 Frienden and Qitian login routes remain the entry points for signing in to Pocklo.
 
 - Developer portal: `/developer`. User grants: `/account/applications`.
-- Admin portal: `/developer/admin`. Set `POCKLO_OAUTH_ADMIN_USER_IDS` to a
-  comma-separated list of Pocklo user IDs. If unset, the existing `admin-qitian`
-  Config entry determines the OAuth administrator.
+- Admin portal: `/developer/admin/`. Set `POCKLO_OAUTH_ADMIN_EMAILS` to a
+  comma-separated list of permitted administrator emails (default `i@6-79.cn`).
+  Administrators sign in using a Notificator email code. Once MFA is enabled,
+  use a TOTP authenticator or a one-time recovery code. Administrative changes
+  require a login within the last five minutes. Preserve the project signing key
+  when upgrading so previously enrolled TOTP secrets can still be decrypted.
 - `POCKLO_OAUTH_WEB_ORIGIN` defaults to `https://pocklo.jyonn.space`. For a
   local Angular frontend use `http://localhost:4200`.
 - Run `python manage.py migrate` before releasing the backend. Client secrets,

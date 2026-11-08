@@ -66,3 +66,20 @@ class ShareCreation(models.Model):
         constraints = [
             models.UniqueConstraint(fields=['grant', 'key_hash'], name='oauth_share_idempotency_key'),
         ]
+
+
+class AdminAccount(models.Model):
+    email = models.EmailField(primary_key=True)
+    code_hash = models.CharField(max_length=64, blank=True)
+    code_sent_at = models.DateTimeField(null=True)
+    code_window = models.DateTimeField(null=True)
+    code_sends = models.PositiveSmallIntegerField(default=0)
+    login_window = models.DateTimeField(null=True)
+    login_attempts = models.PositiveSmallIntegerField(default=0)
+    session_hash = models.CharField(max_length=64, blank=True, db_index=True)
+    verified_at = models.DateTimeField(null=True)
+    totp_ciphertext = models.TextField(blank=True)
+    pending_ciphertext = models.TextField(blank=True)
+    pending_at = models.DateTimeField(null=True)
+    totp_last_counter = models.BigIntegerField(default=-1)
+    recovery_hashes = models.JSONField(default=list)
