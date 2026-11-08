@@ -12,3 +12,5 @@ User/migrations/__pycache__/
 
 mysql.local.conf
 
+
+OAuth/**/__pycache__/

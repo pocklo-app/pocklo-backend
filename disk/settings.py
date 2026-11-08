@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'Config',
     'User',
     'Resource',
+    'OAuth',
 ]
 
 MIDDLEWARE = [
@@ -163,3 +164,11 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/1.10/howto/static-files/
 
 STATIC_URL = '/static/'
+
+
+# The developer platform uses existing Pocklo accounts for user consent.
+POCKLO_OAUTH_WEB_ORIGIN = os.getenv('POCKLO_OAUTH_WEB_ORIGIN', 'https://pocklo.jyonn.space').rstrip('/')
+POCKLO_OAUTH_ADMIN_USER_IDS = {
+    int(value.strip()) for value in os.getenv('POCKLO_OAUTH_ADMIN_USER_IDS', '').split(',')
+    if value.strip()
+}

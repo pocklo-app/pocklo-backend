@@ -23,3 +23,25 @@
 
 ## API文档
 API的设计尽可能的贴近了RestAPI的设计，并通过一定方式保护数据。
+
+## Pocklo OAuth
+
+Pocklo acts as the authorization server for third-party file access. The existing
+Frienden and Qitian login routes remain the entry points for signing in to Pocklo.
+
+- Developer portal: `/developer`. User grants: `/account/applications`.
+- Admin portal: `/developer/admin`. Set `POCKLO_OAUTH_ADMIN_USER_IDS` to a
+  comma-separated list of Pocklo user IDs. If unset, the existing `admin-qitian`
+  Config entry determines the OAuth administrator.
+- `POCKLO_OAUTH_WEB_ORIGIN` defaults to `https://pocklo.jyonn.space`. For a
+  local Angular frontend use `http://localhost:4200`.
+- Run `python manage.py migrate` before releasing the backend. Client secrets,
+  authorization codes and tokens are stored as SHA-256 digests of random values.
+- If running several application workers, configure a shared Django cache and
+  rate limit OAuth traffic at the proxy. Django's default cache limits each worker
+  independently.
+- The [integration guide](https://pocklo.jyonn.space/developer/docs) ships with
+  the frontend at `src/assets/pocklo-oauth.md`.
+
+Notificator credentials are server-side Config entries `notificator-account`,
+`notificator-host` and `notificator-token`. Never commit their values.

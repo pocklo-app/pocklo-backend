@@ -74,6 +74,10 @@ class ConfigInstance:
     RES_CDN_HOST = 'res-cdn-host'
     PUBLIC_CDN_HOST = 'public-cdn-host'
 
+    NOTIFICATOR_ACCOUNT = 'notificator-account'
+    NOTIFICATOR_HOST = 'notificator-host'
+    NOTIFICATOR_TOKEN = 'notificator-token'
+
     MAX_IMAGE_SIZE = 'max-image-size'
     MAX_FILE_SIZE = 'max-file-size'
 
