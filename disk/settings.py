@@ -26,7 +26,7 @@ SECRET_KEY = 'YOUR-SECRET-KEY'
 
 # SECURITY WARNING: don't run with debug turned on in production!
 PROJ_INIT = False
-DEBUG = True
+DEBUG = os.environ.get('DISK_DEBUG') == '1'
 
 ALLOWED_HOSTS = ['disk.6-79.cn', 'localhost', 'local.6-79.cn']
 

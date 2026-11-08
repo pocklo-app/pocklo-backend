@@ -2,6 +2,8 @@
 
 即将使用web前端直接上传到七牛 而无需通过服务器 减小服务器压力
 """
+from urllib.parse import quote
+
 import qiniu
 import requests
 from django.http import HttpRequest
@@ -90,11 +92,11 @@ class QnManager:
         if not verified:
             raise QNErrors.UNAUTH_CALLBACK
 
-    def get_resource_url(self, key, expires=3600, small=False):
+    def get_resource_url(self, key, expires=3600, operation=None):
         """获取资源链接"""
-        url = '%s/%s' % (self.cdn_host, key)
-        if small:
-            return '%s-small' % url
+        url = '%s/%s' % (self.cdn_host.rstrip('/'), quote(key, safe='/'))
+        if operation:
+            url += '?' + operation
         if self.public:
             return url
         else:

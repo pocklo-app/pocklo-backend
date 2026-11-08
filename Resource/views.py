@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.http import HttpResponseRedirect
 from django.utils.crypto import get_random_string
 from django.views import View
@@ -7,7 +8,7 @@ from smartdjango.analyse import Request
 from Base.auth import Auth
 from Base.policy import Policy
 from Base.qn_manager import qn_res_manager, QnManager
-from Resource.models import Resource, RtypeChoice, StypeChoice, CoverChoice
+from Resource.models import Resource, RtypeChoice, StypeChoice
 from Resource.params import ResourceParams
 from Resource.validators import ResourceErrors
 from User.models import User
@@ -29,7 +30,7 @@ class BaseView(View):
 
         if not resource.readable(user, visit_key):
             raise ResourceErrors.NOT_READABLE
-        return resource.d_layer()
+        return resource.d_layer(user, visit_key)
 
     @analyse.json(
         ResourceParams.rname.copy().null().default(None),
@@ -41,6 +42,7 @@ class BaseView(View):
     )
     @analyse.argument(ResourceParams.resource_getter)
     @Auth.require_owner
+    @transaction.atomic
     def put(self, request: Request, **kwargs):
         """ PUT /api/res/:slug/
 
@@ -54,9 +56,12 @@ class BaseView(View):
         right_bubble = request.json.right_bubble
         parent: Resource = request.json.parent
 
-        resource: Resource = request.argument.resource
+        # Serialize tree edits by owner so two concurrent moves cannot create a cycle.
+        User.objects.select_for_update().get(pk=user.pk)
+        resource = Resource.get_by_id(request.argument.resource.res_str_id)
 
         if parent:
+            parent = Resource.get_by_id(parent.res_str_id)
             if not parent.belong(user):
                 raise ResourceErrors.RESOURCE_NOT_BELONG
 
@@ -64,13 +69,15 @@ class BaseView(View):
                 raise ResourceErrors.REQUIRE_FOLDER
 
             temp_res = parent
-            while temp_res.pk != Resource.ROOT_ID:
-                if temp_res.pk == resource.pk:
+            visited = {resource.pk}
+            while temp_res and temp_res.pk != Resource.ROOT_ID:
+                if temp_res.pk in visited:
                     raise ResourceErrors.RESOURCE_CIRCLE
+                visited.add(temp_res.pk)
                 temp_res = temp_res.parent
 
         resource.modify_info(rname, description, status, visit_key, right_bubble, parent)
-        return resource.d()
+        return resource.d(include_key=True)
 
     @analyse.argument(ResourceParams.resource_getter)
     @Auth.require_owner
@@ -81,7 +88,7 @@ class BaseView(View):
         """
         resource: Resource = request.argument.resource
 
-        if resource.parent == Resource.ROOT_ID:
+        if resource.parent_id == Resource.ROOT_ID:
             raise ResourceErrors.DELETE_ROOT_FOLDER
 
         resource.remove()
@@ -166,6 +173,8 @@ class TokenView(View):
         filename = request.query.filename
         filename = QnManager.encode_key(filename)
         parent: Resource = request.argument.resource
+        if parent.rtype != RtypeChoice.FOLDER:
+            raise ResourceErrors.REQUIRE_FOLDER
 
         import datetime
         crt_time = datetime.datetime.now().timestamp()
@@ -202,6 +211,8 @@ class TokenView(View):
 
         if not parent.belong(user):
             raise ResourceErrors.PARENT_NOT_BELONG
+        if parent.rtype != RtypeChoice.FOLDER:
+            raise ResourceErrors.REQUIRE_FOLDER
 
         decode_fname = QnManager.decode_key(fname)
         if fname != decode_fname:
@@ -212,82 +223,6 @@ class TokenView(View):
 
         resource = Resource.create_file(fname, user, parent, key, fsize, sub_type, ftype)
         return resource.d_child()
-
-
-class CoverView(View):
-    @analyse.query(ResourceParams.rname.copy().rename('filename'))
-    @analyse.argument(ResourceParams.resource_getter)
-    @Auth.require_owner
-    def get(self, request: Request, **kwargs):
-        """ GET /api/res/:res_str_id/cover
-
-        获取七牛上传资源封面token
-        """
-        filename = request.query.filename
-        filename = QnManager.encode_key(filename)
-        resource: Resource = request.argument.resource
-
-        import datetime
-        crt_time = datetime.datetime.now().timestamp()
-        salt = get_random_string(4)
-        key = 'cover/%s/%s/%s' % (salt, crt_time, filename)
-        qn_token, key = qn_res_manager.get_upload_token(key, Policy.cover(resource.res_str_id))
-        return dict(upload_token=qn_token, key=key)
-
-    @analyse.json('key')
-    @analyse.argument(ResourceParams.resource_getter)
-    def post(self, request):
-        """ POST /api/res/:res_str_id/cover
-
-        七牛上传资源封面成功后的回调函数
-        """
-        qn_res_manager.auth_callback(request)
-
-        key = request.json.key
-        resource: Resource = request.argument.resource
-
-        resource.modify_cover(key, CoverChoice.UPLOAD)
-        return resource.d()
-
-    @analyse.json(ResourceParams.cover, ResourceParams.cover_type)
-    @analyse.argument(ResourceParams.resource_getter)
-    @Auth.require_owner
-    def put(self, request: Request, **kwargs):
-        """ PUT /api/res/:res_str_id/cover
-
-        修改封面信息
-        """
-        cover = request.json.cover
-        cover_type = request.json.cover_type
-
-        resource: Resource = request.argument.resource
-        user = request.user
-
-        if cover_type == CoverChoice.UPLOAD:
-            raise ResourceErrors.NOT_ALLOWED_COVER_UPLOAD
-        if cover_type == CoverChoice.SELF and resource.sub_type != StypeChoice.IMAGE:
-            raise ResourceErrors.NOT_ALLOWED_COVER_SELF_OF_NOT_IMAGE
-        if cover_type == CoverChoice.RESOURCE:
-            resource_chain = [cover]
-            next_str_id = cover
-            while True:
-                next_res = Resource.get_by_id(next_str_id)
-                if next_res.res_str_id == resource.res_str_id:
-                    raise ResourceErrors.RESOURCE_CIRCLE
-                if not next_res.belong(user):
-                    raise ResourceErrors.RESOURCE_NOT_BELONG
-                if next_res.cover_type == CoverChoice.RESOURCE:
-                    next_str_id = next_res.cover
-                elif next_res.cover_type == CoverChoice.PARENT:
-                    next_str_id = next_res.parent.res_str_id
-                else:
-                    break
-                if next_str_id in resource_chain:
-                    raise ResourceErrors.RESOURCE_CIRCLE
-                resource_chain.append(next_str_id)
-
-        resource.modify_cover(cover, cover_type)
-        return resource.d()
 
 
 class BaseInfoView(View):
@@ -301,10 +236,8 @@ class BaseInfoView(View):
         user = request.user  # type: User
         resource: Resource = request.argument.resource
 
-        return dict(
-            info=resource.d_base(),
-            readable=resource.readable(user, None)
-        )
+        readable = resource.readable(user, None)
+        return dict(info=resource.d_base(readable), readable=readable)
 
 
 class DownloadView(View):
