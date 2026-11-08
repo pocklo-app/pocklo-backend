@@ -40,6 +40,7 @@ class User(models.Model, Dictify):
         default=None,
         max_length=vldt.MAX_QT_USER_APP_ID_LENGTH,
         unique=True,
+        null=True,
     )
 
     qtb_token = models.CharField(
@@ -141,7 +142,7 @@ class User(models.Model, Dictify):
 
     def refresh_profile(self, force=False, suppress_error=False):
         now = time.time()
-        if not force and self.profile_is_fresh(now):
+        if not self.qtb_token or (not force and self.profile_is_fresh(now)):
             return False
 
         try:
@@ -176,7 +177,7 @@ class User(models.Model, Dictify):
 class FriendenBinding(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='frienden_binding')
     subject = models.CharField(max_length=255, unique=True)
-    phone = models.CharField(max_length=14)
+    phone = models.CharField(max_length=14, unique=True)
 
 
 class FriendenBindingFlow(models.Model):
@@ -185,3 +186,10 @@ class FriendenBindingFlow(models.Model):
     verifier = models.CharField(max_length=128)
     expires_at = models.DateTimeField()
     claimed = models.BooleanField(default=False)
+
+
+class FriendenLoginFlow(models.Model):
+    state_hash = models.CharField(max_length=64, primary_key=True)
+    browser_hash = models.CharField(max_length=64)
+    verifier = models.CharField(max_length=128)
+    expires_at = models.DateTimeField(db_index=True)

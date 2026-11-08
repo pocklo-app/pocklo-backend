@@ -91,7 +91,7 @@ class Auth:
             request = analyse.get_request(*args)
             cls._extract_user(request)
             user = request.user
-            if user.qt_user_app_id != ADMIN_QITIAN:
+            if not ADMIN_QITIAN or user.qt_user_app_id != ADMIN_QITIAN:
                 raise AuthErrors.REQUIRE_ROOT
             return func(*args, **kwargs)
         return wrapper
