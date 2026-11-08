@@ -1,4 +1,4 @@
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseBase
 
 from smartdjango.error import Error, OK
 from smartdjango.utils import io
@@ -10,7 +10,7 @@ class CompatibleAPIPacker:
 
     def __call__(self, request, *args, **kwargs):
         response = self.get_response(request, *args, **kwargs)
-        if isinstance(response, HttpResponse):
+        if isinstance(response, HttpResponseBase):
             return response
 
         return self.pack(response)

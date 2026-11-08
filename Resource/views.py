@@ -16,29 +16,19 @@ from User.params import UserParams
 
 
 class BaseView(View):
-    @Auth.maybe_login
-    @analyse.query(ResourceParams.visit_key.copy().null().default(None))
     @analyse.argument(ResourceParams.resource_getter)
+    @Auth.require_owner
     def get(self, request: Request, **kwargs):
         """ GET /api/res/:res_str_id
 
         获取资源信息
         """
-        user = request.user
-        resource: Resource = request.argument.resource
-        visit_key = request.query.visit_key
-
-        if not resource.readable(user, visit_key):
-            raise ResourceErrors.NOT_READABLE
-        return resource.d_layer(user, visit_key)
+        return request.argument.resource.d_layer()
 
     @analyse.json(
         ResourceParams.rname.copy().null().default(None),
-        ResourceParams.status.copy().null().default(None),
-        ResourceParams.description.copy().null().default(None),
-        ResourceParams.visit_key.copy().null().default(None),
-        ResourceParams.right_bubble.copy().null().default(None),
-        ResourceParams.parent_getter.copy().null().default(None)
+        ResourceParams.parent_getter.copy().null().default(None),
+        restrict_keys=False,
     )
     @analyse.argument(ResourceParams.resource_getter)
     @Auth.require_owner
@@ -50,10 +40,6 @@ class BaseView(View):
         """
         user = request.user
         rname = request.json.rname
-        description = request.json.description
-        status = request.json.status
-        visit_key = request.json.visit_key
-        right_bubble = request.json.right_bubble
         parent: Resource = request.json.parent
 
         # Serialize tree edits by owner so two concurrent moves cannot create a cycle.
@@ -76,8 +62,12 @@ class BaseView(View):
                 visited.add(temp_res.pk)
                 temp_res = temp_res.parent
 
-        resource.modify_info(rname, description, status, visit_key, right_bubble, parent)
-        return resource.d(include_key=True)
+        if rname is not None:
+            resource.rname = rname
+        if parent is not None:
+            resource.parent = parent
+        resource.save(update_fields=['rname', 'parent'])
+        return resource.d()
 
     @analyse.argument(ResourceParams.resource_getter)
     @Auth.require_owner
@@ -227,58 +217,21 @@ class TokenView(View):
 
 class BaseInfoView(View):
     @analyse.argument(ResourceParams.resource_getter)
-    @Auth.maybe_login
+    @Auth.require_owner
     def get(self, request, **kwargs):
-        """ GET /api/res/:res_str_id/base
-
-        获取资源公开信息
-        """
-        user = request.user  # type: User
-        resource: Resource = request.argument.resource
-
-        readable = resource.readable(user, None)
-        return dict(info=resource.d_base(readable), readable=readable)
+        return dict(info=request.argument.resource.d_base(readable=True), readable=True)
 
 
 class DownloadView(View):
-    @staticmethod
-    @Auth.maybe_login
-    def get_dl_link(request: Request, visit_key):
-        user = request.user
-
-        resource: Resource = request.data.resource
-        if not resource.readable(user, visit_key):
+    @analyse.query(Validator('token', '登录口令').null().default(None, as_final=True), restrict_keys=False)
+    @analyse.argument(ResourceParams.resource_getter)
+    def get(self, request, **kwargs):
+        if request.query.token and not request.META.get('HTTP_TOKEN'):
+            request.META['HTTP_TOKEN'] = request.query.token
+        Auth._extract_user(request)
+        resource = request.argument.resource
+        if not resource.belong(request.user):
             raise ResourceErrors.NOT_READABLE
-
         if resource.rtype == RtypeChoice.FOLDER:
             raise ResourceErrors.REQUIRE_FILE
-
-        dl_url = resource.get_dl_url()
-        return HttpResponseRedirect(dl_url)
-
-    @analyse.query(
-        Validator('token', '登录口令').null().default(None, as_final=True),
-        ResourceParams.visit_key.copy().null().default(None, as_final=True),
-    )
-    @analyse.argument(ResourceParams.resource_getter)
-    def get(self, request: Request, **kwargs):
-        """ GET /api/res/:res_str_id/dl
-
-        获取下载资源链接
-        """
-        request.META['HTTP_TOKEN'] = request.query.token
-
-        visit_key = request.query.visit_key
-        return DownloadView.get_dl_link(request, visit_key)
-
-
-class ShortLinkView(View):
-    @analyse.query(ResourceParams.visit_key.copy().null().default(None))
-    @analyse.argument(ResourceParams.shortlink_resource_getter, restrict_keys=False)
-    def get(self, request: Request, **kwargs):
-        """ /s/:res_str_id
-
-        GET: direct_link, 直链分享解析
-        """
-        visit_key = request.query.visit_key
-        return DownloadView.get_dl_link(request, visit_key)
+        return HttpResponseRedirect(resource.get_dl_url())

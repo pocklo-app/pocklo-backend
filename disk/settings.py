@@ -60,6 +60,7 @@ MIDDLEWARE = [
 
 # 增加跨域
 CORS_ALLOW_CREDENTIALS = True
+CORS_EXPOSE_HEADERS = ('Accept-Ranges', 'Content-Range', 'Content-Length', 'Content-Encoding')
 CORS_ORIGIN_ALLOW_ALL = True
 # CORS_ORIGIN_WHITELIST = (
 #     '*'
@@ -86,6 +87,7 @@ CORS_ALLOW_HEADERS = (
     'x-csrftoken',
     'x-requested-with',
     'Pragma',
+    'Range',
     'Token',
 )
 

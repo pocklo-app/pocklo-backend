@@ -4,7 +4,7 @@ from uuid import UUID
 
 import requests
 from django.db.models import Case, Q, Value, When
-from django.http import JsonResponse
+from django.http import FileResponse, JsonResponse
 from django.utils.cache import add_never_cache_headers
 from django.views import View
 from smartdjango import Code, Error, analyse
@@ -13,7 +13,7 @@ from Base.auth import Auth
 from Base.qn_manager import qn_res_manager
 from Resource.models import Resource, Share
 from Resource.params import ResourceParams
-from Resource.validators import ResourceErrors, RtypeChoice, StatusChoice, StypeChoice
+from Resource.validators import ResourceErrors, RtypeChoice, StypeChoice
 
 
 @Error.register
@@ -51,7 +51,7 @@ def get_share(token):
         raise WorkspaceErrors.SHARE_NOT_FOUND
 
 
-def path_to(resource, root=None, inherited=False):
+def path_to(resource, root=None):
     """Return the path inside a share, or the owner's ordinary breadcrumb."""
     path = []
     seen = set()
@@ -63,8 +63,6 @@ def path_to(resource, root=None, inherited=False):
         path.append(resource)
         if root and resource.pk == root.pk:
             return list(reversed(path))
-        if inherited and not resource.right_bubble:
-            break
         resource = resource.parent
     return [] if root else list(reversed(path))
 
@@ -73,46 +71,15 @@ class WorkspaceAccess:
     def __init__(self, request, share=None):
         self.user = request.user
         self.share = share
-        self.key = request.GET.get('visit_key')
-        self.legacy_root = None
-        legacy_id = request.GET.get('legacy_root')
-        if not share and legacy_id and self.key:
-            root = Resource.objects.filter(res_str_id=legacy_id).first()
-            if root and root.readable(None, self.key):
-                self.legacy_root = root
 
     def owns(self, resource):
-        return not self.share and resource.owner_id == getattr(self.user, 'pk', None)
+        return bool(not self.share and self.user and resource.belong(self.user))
 
     def path(self, resource):
-        if self.share:
-            return path_to(resource, self.share.resource)
-        if self.owns(resource):
-            return path_to(resource)
-        if self.legacy_root:
-            legacy_path = path_to(resource, self.legacy_root, inherited=True)
-            if legacy_path:
-                return legacy_path
-        path = [resource]
-        for parent in reversed(path_to(resource)[:-1]):
-            if not path[-1].right_bubble or not parent.readable(self.user, None):
-                break
-            path.append(parent)
-        return list(reversed(path))
+        return path_to(resource, self.share.resource if self.share else None)
 
     def allows(self, resource):
-        if self.share:
-            return bool(self.path(resource))
-        if self.owns(resource):
-            return True
-        if self.legacy_root and path_to(resource, self.legacy_root, inherited=True):
-            return True
-        return resource.readable(self.user, None if self.legacy_root else self.key)
-
-    def can_enter_child(self, child):
-        if self.share or self.owns(child):
-            return True  # The caller has already established the scope of the parent.
-        return self.allows(child)
+        return bool(self.path(resource)) if self.share else self.owns(resource)
 
     def require(self, resource):
         if not self.allows(resource):
@@ -132,6 +99,8 @@ def preview_type(resource):
         return 'video'
     if resource.sub_type == StypeChoice.MUSIC:
         return 'audio'
+    if mime == 'application/pdf' or name.endswith('.pdf'):
+        return 'pdf'
     if mime == 'text/markdown' or name.endswith(('.md', '.markdown', '.mdown')):
         return 'markdown'
     if mime.startswith('text/') or name.endswith(('.txt', '.log', '.csv')):
@@ -139,7 +108,7 @@ def preview_type(resource):
     return None
 
 
-def entry(resource, detail=False):
+def entry(resource):
     thumbnail = resource.get_cover_urls()[1]
     result = {
         'id': resource.res_str_id,
@@ -150,8 +119,6 @@ def entry(resource, detail=False):
         'created_at': resource.create_time.isoformat(),
         'thumbnail': thumbnail,
     }
-    if detail:
-        result['note'] = resource.description or ''
     return result
 
 
@@ -159,7 +126,7 @@ def children(resource):
     return Resource.objects.filter(parent=resource, owner_id=resource.owner_id).order_by('rname', 'pk')
 
 
-def search(resource, access, query):
+def search(resource, query):
     """Walk only visible directories and stop once a page of matches is found."""
     folders = [(resource.pk, '')]
     seen = {resource.pk}
@@ -176,7 +143,7 @@ def search(resource, access, query):
                 .order_by('parent_id', 'rname', 'pk')
             )
             for child in rows.iterator():
-                if child.pk in seen or not access.can_enter_child(child):
+                if child.pk in seen:
                     continue
                 relative_path = batch[child.parent_id]
                 if child.name_matches:
@@ -195,15 +162,15 @@ def workspace(request, resource, access):
     query = request.GET.get('q', '').strip()
     entries = []
     has_more = False
-    if resource.rtype == RtypeChoice.FOLDER and request.GET.get('detail') != '1':
+    if resource.rtype == RtypeChoice.FOLDER:
         if query:
-            entries, has_more = search(resource, access, query[:256])
+            entries, has_more = search(resource, query[:256])
         else:
-            visible = [child for child in children(resource) if access.can_enter_child(child)]
+            visible = list(children(resource))
             visible.sort(key=lambda child: child.rtype != RtypeChoice.FOLDER)
             entries = [entry(child) for child in visible]
     return reply({
-        'resource': entry(resource, detail=True),
+        'resource': entry(resource),
         'entries': entries,
         'breadcrumbs': [{'id': item.res_str_id, 'name': item.rname} for item in access.path(resource)],
         'can_manage': access.owns(resource),
@@ -223,18 +190,7 @@ class ShareCollectionView(View):
     @Auth.require_login
     def get(self, request):
         shares = Share.objects.filter(resource__owner=request.user).select_related('resource')
-        legacy = (
-            Resource.objects.filter(owner=request.user, status__in=(StatusChoice.PUBLIC, StatusChoice.PROTECT))
-            .exclude(pk=Resource.ROOT_ID)
-            .order_by('rname', 'pk')
-        )
-        return reply({
-            'links': [share_info(share) for share in shares.order_by('-created_at', '-pk')],
-            'legacy': [
-                {'id': item.res_str_id, 'name': item.rname, 'protected': item.status == StatusChoice.PROTECT}
-                for item in legacy
-            ],
-        })
+        return reply({'links': [share_info(share) for share in shares.order_by('-created_at', '-pk')]})
 
     @Auth.require_login
     @analyse.json(ResourceParams.resource_getter)
@@ -262,15 +218,6 @@ class ShareView(View):
         return reply(None)
 
 
-class LegacyShareView(View):
-    @analyse.argument(ResourceParams.resource_getter)
-    @Auth.require_owner
-    def delete(self, request, **kwargs):
-        resource = request.argument.resource
-        Resource.objects.filter(pk=resource.pk).update(status=StatusChoice.PRIVATE)
-        return reply(None)
-
-
 def text_preview(url):
     try:
         with requests.get(url, stream=True, timeout=(3, 5), allow_redirects=False) as response:
@@ -289,19 +236,23 @@ def text_preview(url):
     }
 
 
+def require_content_access(request, resource):
+    share_token = request.GET.get('share')
+    share = None
+    if share_token:
+        try:
+            share = get_share(UUID(share_token))
+        except ValueError:
+            raise WorkspaceErrors.SHARE_NOT_FOUND
+    WorkspaceAccess(request, share).require(resource)
+
+
 class ContentView(View):
     @Auth.maybe_login
     @analyse.argument(ResourceParams.resource_getter)
     def get(self, request, **kwargs):
         resource = request.argument.resource
-        share_token = request.GET.get('share')
-        share = None
-        if share_token:
-            try:
-                share = get_share(UUID(share_token))
-            except ValueError:
-                raise WorkspaceErrors.SHARE_NOT_FOUND
-        WorkspaceAccess(request, share).require(resource)
+        require_content_access(request, resource)
 
         kind = preview_type(resource)
         if resource.rtype == RtypeChoice.FOLDER or not resource.dlpath:
@@ -317,6 +268,8 @@ class ContentView(View):
             return reply({'kind': 'download', 'url': resource.get_dl_url(expires=MEDIA_TTL, attachment=True)})
         if kind == 'link':
             return reply({'kind': kind, 'url': resource.dlpath})
+        if kind == 'pdf':
+            return reply({'kind': kind})
         if not kind:
             return reply({'kind': 'unsupported'})
 
@@ -324,3 +277,34 @@ class ContentView(View):
         if kind in ('markdown', 'text'):
             return reply({'kind': kind, **text_preview(url)})
         return reply({'kind': kind, 'url': url})
+
+
+class PdfView(View):
+    @Auth.maybe_login
+    @analyse.argument(ResourceParams.resource_getter)
+    def get(self, request, **kwargs):
+        resource = request.argument.resource
+        require_content_access(request, resource)
+        if preview_type(resource) != 'pdf' or not resource.dlpath:
+            raise WorkspaceErrors.PREVIEW_FAILED
+
+        headers = {'Accept-Encoding': 'identity'}
+        byte_range = request.headers.get('Range')
+        if byte_range:
+            headers['Range'] = byte_range
+        url = qn_res_manager.get_resource_url(resource.dlpath, expires=MEDIA_TTL)
+        try:
+            upstream = requests.get(url, headers=headers, stream=True, timeout=(3, 12), allow_redirects=False)
+        except requests.RequestException:
+            raise WorkspaceErrors.PREVIEW_FAILED
+        if upstream.status_code not in (200, 206, 416):
+            upstream.close()
+            raise WorkspaceErrors.PREVIEW_FAILED
+
+        response = FileResponse(upstream.raw, status=upstream.status_code, content_type='application/pdf')
+        response['Content-Encoding'] = 'identity'
+        for header in ('Accept-Ranges', 'Content-Range', 'Content-Length'):
+            if header in upstream.headers:
+                response[header] = upstream.headers[header]
+        add_never_cache_headers(response)
+        return response

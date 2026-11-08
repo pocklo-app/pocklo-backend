@@ -35,12 +35,6 @@ class RtypeChoice(Choice):
     LINK = 2
 
 
-class StatusChoice(Choice):
-    PUBLIC = 0
-    PRIVATE = 1
-    PROTECT = 2
-
-
 class StypeChoice(Choice):
     FOLDER = 0
     IMAGE = 1

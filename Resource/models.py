@@ -11,7 +11,7 @@ from django.db import models
 from django.utils.crypto import get_random_string
 from smartdjango import Error
 
-from Resource.validators import ResourceErrors, RtypeChoice, StypeChoice, StatusChoice, CoverChoice, ResourceValidator
+from Resource.validators import ResourceErrors, RtypeChoice, StypeChoice, CoverChoice, ResourceValidator
 from User.models import User
 
 
@@ -49,12 +49,6 @@ class Resource(models.Model, Dictify):
         default=True,
         max_length=vldt.MAX_MIME_LENGTH,
     )
-    description = models.TextField(
-        verbose_name='resource note',
-        null=True,
-        blank=True,
-        default=None,
-    )
     cover = models.CharField(
         null=True,
         blank=True,
@@ -80,21 +74,6 @@ class Resource(models.Model, Dictify):
         null=True,
         blank=True,
     )
-    status = models.IntegerField(
-        choices=StatusChoice.to_choices(),
-        verbose_name='加密状态 0公开 1仅自己可见 2需要密码',
-        default=StatusChoice.PRIVATE,
-    )
-    visit_key = models.CharField(
-        max_length=vldt.MAX_VISIT_KEY_LENGTH,
-        verbose_name='当status为2时有效',
-        validators=[vldt.visit_key],
-    )
-    vk_change_time = models.FloatField(
-        null=True,
-        blank=True,
-        default=0,
-    )
     create_time = models.DateTimeField()
     dlcount = models.IntegerField(
         verbose_name='download number',
@@ -107,12 +86,6 @@ class Resource(models.Model, Dictify):
         blank=True,
         max_length=vldt.MAX_RES_STR_ID_LENGTH,
         unique=True,
-    )
-    right_bubble = models.BooleanField(
-        verbose_name='读取权限向上冒泡',
-        default=False,
-        null=True,
-        blank=True,
     )
     cover_type = models.IntegerField(
         choices=CoverChoice.to_choices(),
@@ -133,28 +106,23 @@ class Resource(models.Model, Dictify):
                     return res_str_id
 
     @classmethod
-    def create_abstract(cls, rname, rtype, desc, user, parent, dlpath, rsize, sub_type, mime):
+    def create_abstract(cls, rname, rtype, user, parent, dlpath, rsize, sub_type, mime):
         crt_time = datetime.datetime.now()
 
         return cls(
             rname=rname,
             rtype=rtype,
             mime=mime,
-            description=desc,
             cover=None,
             cover_type=CoverChoice.SELF if sub_type == StypeChoice.IMAGE else CoverChoice.RANDOM,
             owner=user,
             parent=parent,
             dlpath=dlpath,
-            status=StatusChoice.PRIVATE,
-            visit_key=get_random_string(length=4),
             create_time=crt_time,
-            vk_change_time=crt_time.timestamp(),
             rsize=rsize,
             sub_type=sub_type,
             res_str_id=cls.get_unique_id(),
             dlcount=0,
-            right_bubble=False,
         )
 
     @classmethod
@@ -174,7 +142,6 @@ class Resource(models.Model, Dictify):
             res = cls.create_abstract(
                 rname=rname,
                 rtype=RtypeChoice.FILE,
-                desc=None,
                 user=user,
                 parent=res_parent,
                 dlpath=dlpath,
@@ -188,20 +155,18 @@ class Resource(models.Model, Dictify):
         return res
 
     @classmethod
-    def create_folder(cls, rname, user, res_parent, desc=None):
+    def create_folder(cls, rname, user, res_parent):
         """ 创建文件夹对象
 
         :param rname: 文件夹名
         :param user: 所属用户
         :param res_parent: 所属目录
-        :param desc: 描述说明
         :return: Ret对象，错误返回错误代码，成功返回文件夹对象
         """
         try:
             res = cls.create_abstract(
                 rname=rname,
                 rtype=RtypeChoice.FOLDER,
-                desc=desc,
                 user=user,
                 parent=res_parent,
                 dlpath=None,
@@ -228,7 +193,6 @@ class Resource(models.Model, Dictify):
             res = cls.create_abstract(
                 rname=rname,
                 rtype=RtypeChoice.LINK,
-                desc=None,
                 user=user,
                 parent=res_parent,
                 dlpath=dlpath,
@@ -293,37 +257,16 @@ class Resource(models.Model, Dictify):
     def _dictify_create_time(self):
         return self.create_time.timestamp()
 
-    def _dictify_visit_key(self):
-        return self.visit_key if self.status == StatusChoice.PROTECT else None
-
     def _dictify_is_home(self):
         return self.is_home()
-
-    def _dictify_secure_env(self):
-        if self.pk == Resource.ROOT_ID or \
-                not self.right_bubble or \
-                self.status == StatusChoice.PUBLIC:
-            return True
-        res = self.parent
-        visited = {self.pk}
-        while res and res.pk != Resource.ROOT_ID and res.pk not in visited:
-            visited.add(res.pk)
-            if res.status == StatusChoice.PUBLIC:
-                return res.rname
-            if not res.right_bubble:
-                break
-            res = res.parent
-        return True
 
     def _dictify_parent_str_id(self):
         return self.parent.res_str_id if self.parent_id else None
 
-    def d(self, include_key=False):
-        dict_ = self.dictify('res_str_id', 'rname', 'rtype', 'rsize', 'sub_type', 'description',
-                             'cover_type', 'owner', 'parent_str_id', 'status', 'create_time',
-                             'dlcount', 'is_home', 'right_bubble', 'secure_env')
-        if include_key:
-            dict_['visit_key'] = self._dictify_visit_key()
+    def d(self):
+        dict_ = self.dictify('res_str_id', 'rname', 'rtype', 'rsize', 'sub_type',
+                             'owner', 'parent_str_id', 'create_time', 'dlcount', 'is_home')
+        dict_['status'] = 1  # Fixed compatibility value for released CLI versions.
         dict_['cover_type'] = (
             CoverChoice.SELF if self.sub_type in (StypeChoice.IMAGE, StypeChoice.VIDEO) else CoverChoice.RANDOM
         )
@@ -335,7 +278,7 @@ class Resource(models.Model, Dictify):
         return dict_
 
     def d_base(self, readable=False):
-        dict_ = self.dictify('status', 'is_home', 'owner', 'create_time', 'right_bubble')
+        dict_ = self.dictify('is_home', 'owner', 'create_time')
         cover_urls = self.get_cover_urls() if readable else (None, None)
         dict_.update(dict(
             cover=cover_urls[0],
@@ -349,7 +292,6 @@ class Resource(models.Model, Dictify):
             'rname',
             'rtype',
             'rsize',
-            'status',
             'create_time',
             'sub_type',
             'dlcount',
@@ -357,21 +299,13 @@ class Resource(models.Model, Dictify):
         cover_urls = self.get_cover_urls()
         dict_.update(dict(
             cover_small=cover_urls[1],
+            status=1,  # Compatibility with the released CLI listing.
         ))
         return dict_
 
-    def d_layer(self, user=None, visit_key=None):
-        child_list = Resource.objects.filter(parent=self, owner_id=self.owner_id)
-        child_list = [
-            child.d_child() for child in child_list
-            if child.readable(user, None)
-            or (visit_key and self.status == StatusChoice.PROTECT and self.visit_key == visit_key
-                and child.right_bubble)
-        ]
-        return dict(
-            info=self.d(include_key=self.owner_id == getattr(user, 'pk', None)),
-            child_list=child_list,
-        )
+    def d_layer(self):
+        children = Resource.objects.filter(parent=self, owner_id=self.owner_id)
+        return dict(info=self.d(), child_list=[child.d_child() for child in children])
 
     def d_child_selector(self):
         return self.dictify('res_str_id', 'rname', 'rtype', 'sub_type')
@@ -398,26 +332,6 @@ class Resource(models.Model, Dictify):
             raise ResourceErrors.GET_ROOT_FOLDER
         return res
 
-    def readable(self, user, visit_key):
-        """判断当前资源是否被当前用户可读"""
-        res = self
-        visited = set()
-        while res and res.pk != Resource.ROOT_ID and res.pk not in visited:
-            visited.add(res.pk)
-            if res.owner_id == getattr(user, 'pk', None) or res.status == StatusChoice.PUBLIC:
-                return True
-            if res.status == StatusChoice.PROTECT and res.visit_key == visit_key:
-                if user:
-                    UserRight.update(user, res)
-                return True
-            if res.status == StatusChoice.PROTECT and UserRight.verify(user, res):
-                return True
-            if not res.right_bubble:
-                break
-            res = res.parent
-            visit_key = None
-        return False
-
     def get_dl_url(self, expires=3600, attachment=False):
         """获取当前资源的下载链接"""
         Resource.objects.filter(pk=self.pk).update(dlcount=models.F('dlcount') + 1)
@@ -426,52 +340,6 @@ class Resource(models.Model, Dictify):
         from Base.qn_manager import qn_res_manager
         operation = urlencode({'attname': self.rname}) if attachment else None
         return qn_res_manager.get_resource_url(self.dlpath, expires=expires, operation=operation)
-
-    def get_visit_key(self):
-        """获取当前资源的访问密码"""
-        if self.status == StatusChoice.PROTECT:
-            return self.visit_key
-        return None
-
-    """
-    修改方法
-    """
-
-    def modify_info(self, rname, description, status, visit_key, right_bubble, parent):
-        """ 修改资源属性
-
-        :param rname: 资源名称
-        :param description: 资源介绍
-        :param status: 资源分享类型（公开、私有、加密）
-        :param visit_key: 资源加密密钥
-        :param right_bubble: 资源读取权限是否向上查询
-        :param parent: 移动后的新父目录
-        :return: Ret对象，错误返回错误代码，成功返回资源对象
-        """
-        if rname is None:
-            rname = self.rname
-        if description is None:
-            description = self.description or ''
-        if status is None:
-            status = self.status
-        if visit_key is None:
-            visit_key = self.visit_key
-        if right_bubble is None:
-            right_bubble = self.right_bubble
-        if parent is None:
-            parent = self.parent
-
-        self.rname = rname
-        self.description = description
-        self.status = status
-        self.right_bubble = right_bubble
-        self.parent = parent
-        if status == StatusChoice.PROTECT:
-            if self.visit_key != visit_key:
-                self.visit_key = visit_key
-                self.vk_change_time = datetime.datetime.now().timestamp()
-        self.save(update_fields=['rname', 'description', 'status', 'right_bubble', 'parent',
-                                 'visit_key', 'vk_change_time'])
 
     def is_empty(self):
         """ 资源是否为空（针对文件夹资源） """
@@ -489,66 +357,6 @@ class Resource(models.Model, Dictify):
         if self.rtype == RtypeChoice.FILE:
             qn_res_manager.delete_res(self.dlpath)
         self.delete()
-
-
-class UserRight(models.Model):
-    """
-    用户可读资源权限表（记录加密资源可读性）
-    """
-    user = models.ForeignKey(
-        'User.User',
-        on_delete=models.CASCADE,
-    )
-    res = models.ForeignKey(
-        'Resource.Resource',
-        on_delete=models.CASCADE,
-    )
-    verify_time = models.FloatField(
-        default=0,
-    )
-
-    @classmethod
-    def update(cls, user: User, res: Resource):
-        try:
-            right = cls.get_right(user, res)
-            right.verify_time = datetime.datetime.now().timestamp()
-            right.save()
-        except Error as e:
-            if e == ResourceErrors.RIGHT_NOT_FOUND:
-                try:
-                    right = cls(
-                        user=user,
-                        res=res,
-                        verify_time=datetime.datetime.now().timestamp()
-                    )
-                    right.save()
-                except Exception:
-                    raise ResourceErrors.CREATE_RIGHT
-            else:
-                return e
-        return right
-
-    @classmethod
-    def get_right(cls, user, res):
-        try:
-            right = cls.objects.get(user=user, res=res)
-        except cls.DoesNotExist:
-            raise ResourceErrors.RIGHT_NOT_FOUND
-        return right
-
-    @classmethod
-    def verify(cls, user: User, res: Resource):
-        if not user:
-            return False
-        try:
-            right = cls.get_right(user, res)
-        except Error:
-            return False
-        if right.verify_time > (res.vk_change_time or 0):
-            return True
-        else:
-            right.delete()
-            return False
 
 
 class Share(models.Model):

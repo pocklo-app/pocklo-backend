@@ -1,11 +1,12 @@
-from unittest.mock import patch
+from io import BytesIO
+from unittest.mock import Mock, patch
 
 from django.test import TestCase
 from django.utils import timezone
 
 from Base.auth import Auth
 from Resource.models import Resource, Share
-from Resource.validators import RtypeChoice, StatusChoice, StypeChoice
+from Resource.validators import RtypeChoice, StypeChoice
 from User.models import User
 
 
@@ -28,8 +29,7 @@ class WorkspaceTests(TestCase):
             rtype=RtypeChoice.FOLDER if folder else RtypeChoice.FILE,
             sub_type=kwargs.pop('sub_type', StypeChoice.FOLDER if folder else StypeChoice.FILE),
             mime=kwargs.pop('mime', 'application/octet-stream'),
-            dlpath=None if folder else 'disk/test/' + name, visit_key='old-code',
-            status=kwargs.pop('status', StatusChoice.PRIVATE), right_bubble=False,
+            dlpath=None if folder else 'disk/test/' + name,
             create_time=timezone.now(), **kwargs,
         )
 
@@ -76,7 +76,7 @@ class WorkspaceTests(TestCase):
         owner = self.login_headers(self.owner)
         file_share = Share.objects.create(resource=self.readme)
         storage_key = self.readme.dlpath
-        response = self.client.put('/api/res/readme', {'rname': '路线.md'}, content_type='application/json', **owner)
+        response = self.client.put('/api/res/readme', {'rname': '路线.md', 'status': None, 'description': None, 'visit_key': None, 'right_bubble': None}, content_type='application/json', **owner)
         self.assertEqual(response.status_code, 200, response.content)
         self.readme.refresh_from_db()
         self.assertEqual(self.readme.dlpath, storage_key)
@@ -113,25 +113,30 @@ class WorkspaceTests(TestCase):
         self.assertTrue(sign.call_args.kwargs['operation'].startswith('vframe/'))
         sign.reset_mock()
         response = self.client.get('/api/res/image1/base')
-        self.assertFalse(response.json()['body']['readable'])
-        self.assertIsNone(response.json()['body']['info']['cover'])
+        self.assertEqual(response.status_code, 401)
         sign.assert_not_called()
 
-    @patch('Base.jtoken.SECRET_KEY', 'local-tests-only-test-signing-key')
-    @patch('Base.jtoken.JWT_ENCODE_ALGO', 'HS256')
-    def test_legacy_password_remains_usable_and_can_be_revoked(self):
-        protected = self.make_resource('旧链接', 'legacy', self.directory,
-                                       folder=True, status=StatusChoice.PROTECT)
-        child = self.make_resource('旧文件.txt', 'oldtxt', protected)
-        Resource.objects.filter(pk=child.pk).update(right_bubble=True)
-        response = self.client.get('/api/res/legacy', {'visit_key': protected.visit_key})
-        self.assertEqual(response.status_code, 200)
-        self.assertNotIn('visit_key', response.json()['body']['info'])
-        self.assertEqual(len(response.json()['body']['child_list']), 1)
-        params = {'legacy_root': 'legacy', 'visit_key': protected.visit_key}
-        self.assertEqual(self.client.get('/api/res/oldtxt/workspace', params).status_code, 200)
-        owner = self.login_headers(self.owner)
-        legacy = self.client.get('/api/shares/', **owner).json()['body']['legacy']
-        self.assertEqual(legacy, [{'id': 'legacy', 'name': '旧链接', 'protected': True}])
-        self.assertEqual(self.client.delete('/api/shares/legacy/legacy', **owner).status_code, 200)
-        self.assertEqual(self.client.get('/api/res/oldtxt/workspace', params).status_code, 403)
+    def test_old_resource_links_have_no_public_access(self):
+        for path in ('/api/res/readme', '/api/res/readme/dl', '/api/res/readme/workspace'):
+            self.assertIn(self.client.get(path, {'visit_key': 'old-code'}).status_code, (401, 403))
+        self.assertEqual(self.client.get('/s/readme').status_code, 404)
+
+    @patch('Resource.workspace.qn_res_manager.get_resource_url', return_value='https://storage.example/object')
+    @patch('Resource.workspace.requests.get')
+    def test_pdf_supports_ranges_only_inside_the_share(self, fetch, sign):
+        pdf = self.make_resource('路线.PDF', 'map001', self.subdirectory)
+        fetch.return_value = Mock(
+            status_code=206, raw=BytesIO(b'%PDF'), headers={'Content-Range': 'bytes 0-3/120'},
+        )
+        path = '/api/res/' + pdf.res_str_id
+        self.assertEqual(self.client.get(path + '/pdf').status_code, 403)
+        fetch.assert_not_called()
+        params = {'share': str(self.share.token)}
+        self.assertEqual(self.client.get(path + '/content', params).json()['body']['kind'], 'pdf')
+        response = self.client.get(path + '/pdf', params, HTTP_RANGE='bytes=0-3')
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertEqual(response['Content-Range'], 'bytes 0-3/120')
+        self.assertEqual(b''.join(response.streaming_content), b'%PDF')
+        fetch.assert_called_once()
+        self.assertEqual(fetch.call_args.kwargs['headers']['Range'], 'bytes=0-3')
