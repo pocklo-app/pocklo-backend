@@ -113,6 +113,18 @@ class FriendenBindingTests(TestCase):
         self.assertEqual(FriendenBinding.objects.count(), 1)
         self.assertEqual(User.objects.count(), 2)
 
+    def test_same_phone_rebinding_keeps_original_subject_for_change_detection(self):
+        FriendenBinding.objects.create(user=self.owner, subject=self.identity['sub'], phone=self.identity['phone'])
+        with patch('OAuth.frienden.read_identity', return_value={**self.identity, 'sub': 'sermo:21:456'}):
+            self.assertEqual(self.finish(self.owner, self.start(self.owner)['state']).status_code, 200)
+        self.assertEqual(FriendenBinding.objects.get(user=self.owner).subject, self.identity['sub'])
+
+        other_phone = '+8613800138001'
+        FriendenBinding.objects.create(user=self.other, subject='sermo:20:789', phone=other_phone)
+        with patch('OAuth.frienden.read_identity', return_value={**self.identity, 'phone': other_phone}):
+            self.assertEqual(self.finish_login(self.start_login()).status_code, 409)
+        self.assertEqual(FriendenBinding.objects.count(), 2)
+
     def test_new_frienden_login_creates_root_and_retains_sole_login_method(self):
         Resource.objects.create(pk=Resource.ROOT_ID, owner=self.owner, parent=None, rname='system', res_str_id='system',
                                 rtype=RtypeChoice.FOLDER, sub_type=StypeChoice.FOLDER,

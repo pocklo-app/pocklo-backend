@@ -10,7 +10,7 @@ from django.utils import timezone
 from Base.auth import Auth
 from Resource.models import Resource, Share
 from Resource.validators import RtypeChoice, StypeChoice
-from User.models import User
+from User.models import FriendenBinding, User
 
 from .models import AdminAccount, Application
 from .provider import digest
@@ -168,6 +168,40 @@ class ProviderTests(TestCase):
         self.assertTrue(status.json()['active'])
         self.assertEqual(self.refresh(app, current['refresh_token']).status_code, 400)
         self.assertEqual(self.client.get(BASE + 'files/', **self.bearer(tokens)).status_code, 401)
+
+    def test_frienden_account_proof_checks_client_token_and_current_phone(self):
+        app = self.register().json()
+        other_app = self.register().json()
+        phone = '+8613800138000'
+        binding = FriendenBinding.objects.create(user=self.owner, subject='sermo:1:1', phone=phone)
+        tokens = self.exchange(app, self.consent(app)['code'][0]).json()
+        other_tokens = self.exchange(other_app, self.consent(other_app)['code'][0]).json()
+
+        def prove(token, *, client=app, candidate=phone):
+            return self.client.post(BASE + 'frienden-account/', {'token': token, 'phone': candidate},
+                                    content_type='application/json', **self.client_auth(client))
+
+        self.assertEqual(prove(tokens['access_token']).status_code, 401)
+        with override_settings(POCKLO_OAUTH_FRIENDEN_CLIENT_ID=app['application']['client_id']):
+            first = prove(tokens['access_token'])
+            self.assertEqual(first.status_code, 200, first.content)
+            self.assertEqual(set(first.json()), {'sub'})
+            self.assertNotIn(phone, first.content.decode())
+            self.assertIn('no-store', first['Cache-Control'])
+            self.assertEqual(prove(tokens['refresh_token']).status_code, 401)
+            self.assertEqual(prove(other_tokens['access_token']).status_code, 401)
+            self.assertEqual(prove(other_tokens['access_token'], client=other_app).status_code, 401)
+            self.assertEqual(prove(tokens['access_token'], candidate='13800138000').status_code, 400)
+            mismatch = prove(tokens['access_token'], candidate='+8613800138001')
+            self.assertEqual((mismatch.status_code, mismatch.json()), (409, {'error': 'account_mismatch'}))
+            next_tokens = self.exchange(app, self.consent(app)['code'][0]).json()
+            self.assertEqual(prove(tokens['access_token']).status_code, 401)
+            self.assertEqual(prove(next_tokens['access_token']).json(), first.json())
+            binding.delete()
+            self.assertEqual(prove(next_tokens['access_token']).status_code, 409)
+            self.client.post(BASE + 'revoke/', {'token': next_tokens['access_token']},
+                             content_type='application/json', **self.client_auth(app))
+            self.assertEqual(prove(next_tokens['access_token']).status_code, 401)
 
 
 @override_settings(POCKLO_OAUTH_ADMIN_EMAILS={'reviewer@example.com'})

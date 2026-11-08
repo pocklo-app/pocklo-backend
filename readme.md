@@ -46,5 +46,24 @@ Frienden and Qitian login routes remain the entry points for signing in to Pockl
 - The [integration guide](https://pocklo.jyonn.space/developer/docs) ships with
   the frontend at `src/assets/pocklo-oauth.md`.
 
+### Frienden account confirmation
+
+Set `POCKLO_OAUTH_FRIENDEN_CLIENT_ID` to the OAuth client registered in Pocklo
+for the Frienden server. Leaving it unset disables account confirmation.
+The ID differs from the `pocklo` client registered in Frienden for Pocklo login.
+
+The Frienden server can call `POST /api/oauth/frienden-account/` with the
+registered client's HTTP Basic credentials and JSON fields `token` (a current
+`files.read` access token) and `phone` (the current, verified Frienden number
+as canonical `+86`). Pocklo compares the number to the token owner's saved
+Frienden binding and returns a client-specific `sub` stable across
+reauthorization and token rotation. It returns no phone number.
+
+Invalid input returns 400, incorrect client credentials or an invalid access
+token return 401, and a token without file access returns 403. A missing
+binding or different phone returns 409 `account_mismatch`. Frienden should
+obtain the phone from the authenticated account on its server and recheck it
+when resuming the connection or accessing files.
+
 Notificator credentials are server-side Config entries `notificator-account`,
 `notificator-host` and `notificator-token`. Never commit their values.

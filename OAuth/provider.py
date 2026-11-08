@@ -21,10 +21,12 @@ from django.views import View
 from smartdjango import Error
 
 from Base.auth import Auth
+from OAuth.frienden import PHONE
 from OAuth.models import Application, AuthorizationRequest, Credential, Grant, ShareCreation
 from Resource.models import Resource, Share
 from Resource.validators import RtypeChoice
 from Resource.workspace import entry, search, share_info
+from User.models import FriendenBinding
 
 
 READ = 'files.read'
@@ -439,13 +441,35 @@ def bearer_grant(request, scope):
         'grant__application_id', flat=True).first()
     app = Application.objects.select_for_update().filter(pk=app_id).first()
     credential = find_credential(app, value, ('access',)) if app else None
-    if not credential or not active(credential.grant, app) or credential.generation != credential.grant.generation:
+    return access_grant(app, credential, scope)
+
+
+def access_grant(app, credential, scope):
+    if (not credential or credential.used or not active(credential.grant, app)
+            or credential.generation != credential.grant.generation):
         raise OAuthError('invalid_token', 401)
     grant = credential.grant
     if scope not in grant.scope.split():
         raise OAuthError('insufficient_scope', 403)
     allow_scope(app, scope)
     return grant
+
+
+class FriendenAccount(ProviderView):
+    @transaction.atomic
+    def post(self, request):
+        app = basic_app(request)
+        if app.pk != settings.POCKLO_OAUTH_FRIENDEN_CLIENT_ID:
+            raise OAuthError('invalid_client', 401)
+        data = body(request)
+        phone = data.get('phone')
+        if not isinstance(phone, str) or not PHONE.fullmatch(phone):
+            raise OAuthError('invalid_request')
+        grant = access_grant(app, find_credential(app, data.get('token'), ('access',)), READ)
+        if not FriendenBinding.objects.filter(user_id=grant.user_id, phone=phone).exists():
+            raise OAuthError('account_mismatch', 409)
+        # Grant IDs persist across reauthorization and are unique per client and account.
+        return response({'sub': f'pocklo:{grant.pk}'})
 
 
 def resource_for(grant, resource_id=None):

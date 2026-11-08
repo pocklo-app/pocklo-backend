@@ -23,6 +23,7 @@ urlpatterns = [
     path('token/', provider.Token.as_view()),
     path('introspect/', provider.Introspect.as_view()),
     path('revoke/', provider.Revoke.as_view()),
+    path('frienden-account/', provider.FriendenAccount.as_view()),
     path('grants/', provider.OwnerGrants.as_view()),
     path('grants/<uuid:uid>/', provider.OwnerGrant.as_view()),
     path('files/', provider.Files.as_view()),

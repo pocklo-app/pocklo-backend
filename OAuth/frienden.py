@@ -163,9 +163,15 @@ class FriendenBindingCompleteView(View):
                     if not flow_query.filter(claimed=True, expires_at__gt=timezone.now()).exists():
                         return reply(message='授权已失效，请重新发起绑定。', status=400)
                     binding = FriendenBinding.objects.filter(user=request.user).first()
-                    if binding and binding.subject != subject and binding.phone != phone:
+                    if (binding and binding.subject != subject and (
+                            binding.phone != phone
+                            or FriendenBinding.objects.filter(subject=subject).exists())):
                         return reply(message='请先解绑当前友间账号，再绑定其他账号。', status=409)
-                    FriendenBinding.objects.update_or_create(user=request.user, defaults={'subject': subject, 'phone': phone})
+                    if not binding:
+                        FriendenBinding.objects.create(user=request.user, subject=subject, phone=phone)
+                    elif binding.phone != phone:
+                        binding.phone = phone
+                        binding.save(update_fields=['phone'])
             except IntegrityError:
                 return reply(message='该手机号或友间账号已绑定其他小兜账号。', status=409)
             return reply(binding_status(request.user))
@@ -215,16 +221,18 @@ class FriendenLoginCompleteView(View):
     def account(subject, phone):
         try:
             with transaction.atomic():
+                if FriendenBinding.objects.filter(subject=subject).exclude(phone=phone).exists():
+                    raise FriendenIdentityError('友间手机号已变更，请先在原小兜账号的设置中同步手机号。', 409)
                 binding = FriendenBinding.objects.select_for_update().filter(phone=phone).first()
                 if binding:
                     return binding.user
-                if FriendenBinding.objects.filter(subject=subject).exists():
-                    raise FriendenIdentityError('友间手机号已变更，请先在原小兜账号的设置中同步手机号。', 409)
                 user = User.objects.create(nickname='友间用户', qtb_token='')
                 FriendenBinding.objects.create(user=user, subject=subject, phone=phone)
                 Resource.create_folder('我的文件', user, Resource.get_by_pk(Resource.ROOT_ID))
                 return user
         except IntegrityError:
+            if FriendenBinding.objects.filter(subject=subject).exclude(phone=phone).exists():
+                raise FriendenIdentityError('友间手机号已变更，请先在原小兜账号的设置中同步手机号。', 409) from None
             binding = FriendenBinding.objects.filter(phone=phone).first()
             if binding:
                 return binding.user
