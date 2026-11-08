@@ -171,3 +171,17 @@ class User(models.Model, Dictify):
 
     def remove(self):
         return self.delete()
+
+
+class FriendenBinding(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='frienden_binding')
+    subject = models.CharField(max_length=255, unique=True)
+    phone = models.CharField(max_length=14)
+
+
+class FriendenBindingFlow(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    state_hash = models.CharField(max_length=64)
+    verifier = models.CharField(max_length=128)
+    expires_at = models.DateTimeField()
+    claimed = models.BooleanField(default=False)

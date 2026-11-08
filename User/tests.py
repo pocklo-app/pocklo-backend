@@ -1,3 +1,92 @@
-from django.test import TestCase
+import base64
+import hashlib
+from datetime import timedelta
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
-# Create your tests here.
+from django.test import TestCase
+from django.utils import timezone
+
+from Base.auth import Auth
+from User.models import FriendenBinding, FriendenBindingFlow, User
+
+
+@patch('Base.jtoken.SECRET_KEY', 'local-tests-only-frienden-signing-key')
+@patch('Base.jtoken.JWT_ENCODE_ALGO', 'HS256')
+class FriendenBindingTests(TestCase):
+    binding = '/api/oauth/frienden/binding'
+    complete = '/api/oauth/frienden/complete'
+    identity = {'sub': 'sermo:1:123', 'phone': '+8613800138000', 'phone_verified': True}
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.owner = User.objects.create(qt_user_app_id='owner', qtb_token='')
+        cls.other = User.objects.create(qt_user_app_id='other', qtb_token='')
+
+    def headers(self, user):
+        return {'HTTP_TOKEN': Auth.get_login_token(user)['token']}
+
+    def start(self, user):
+        return self.client.post(self.binding, **self.headers(user)).json()['body']
+
+    def finish(self, user, state, code='synthetic-code'):
+        return self.client.post(self.complete, {'state': state, 'code': code},
+                                content_type='application/json', **self.headers(user))
+
+    def test_verified_phone_is_saved_masked_and_deleted(self):
+        self.assertEqual(self.client.post(self.binding).status_code, 401)
+        flow = self.start(self.owner)
+        parameters = parse_qs(urlsplit(flow['url']).query)
+        saved_flow = FriendenBindingFlow.objects.get(user=self.owner)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(saved_flow.verifier.encode()).digest()).decode().rstrip('=')
+        self.assertEqual(parameters['scope'], ['phone'])
+        self.assertEqual(parameters['code_challenge'], [challenge])
+        self.assertEqual(parameters['redirect_uri'], ['https://pocklo.jyonn.space/oauth/frienden/callback'])
+        with patch('OAuth.frienden.provider', side_effect=[
+            {'access_token': 'synthetic-token'}, self.identity, {'revoked': True},
+        ]) as provider:
+            response = self.finish(self.owner, flow['state'])
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertEqual(provider.call_args_list[-1].args, ('POST', 'revoke'))
+        self.assertEqual(FriendenBinding.objects.get(user=self.owner).phone, self.identity['phone'])
+        self.assertNotIn(self.identity['phone'], response.content.decode())
+        self.assertEqual(response.json()['body'], {'linked': True, 'phone': '+86 •••••••8000'})
+        self.assertEqual(self.client.get(self.binding, **self.headers(self.other)).json()['body']['phone'], None)
+        self.assertEqual(self.client.delete(self.binding, **self.headers(self.owner)).status_code, 200)
+        self.assertFalse(FriendenBinding.objects.exists())
+
+    def test_state_is_account_bound_expires_and_cannot_be_reused(self):
+        flow = self.start(self.owner)
+        with patch('OAuth.frienden.read_identity', return_value=self.identity) as exchange:
+            self.assertEqual(self.finish(self.other, flow['state']).status_code, 400)
+            self.assertEqual(self.finish(self.owner, flow['state'], code='').status_code, 400)
+            self.assertEqual(self.finish(self.owner, flow['state']).status_code, 400)
+            expired = self.start(self.owner)
+            FriendenBindingFlow.objects.update(expires_at=timezone.now() - timedelta(seconds=1))
+            self.assertEqual(self.finish(self.owner, expired['state']).status_code, 400)
+            exchange.assert_not_called()
+            valid = self.start(self.owner)
+            self.assertEqual(self.finish(self.owner, valid['state']).status_code, 200)
+            self.assertEqual(self.finish(self.owner, valid['state']).status_code, 400)
+            exchange.assert_called_once()
+
+    def test_binding_rejects_unverified_numbers_and_subject_conflicts(self):
+        with patch('OAuth.frienden.read_identity', return_value={**self.identity, 'phone_verified': False}):
+            self.assertEqual(self.finish(self.owner, self.start(self.owner)['state']).status_code, 400)
+        self.assertFalse(FriendenBinding.objects.exists())
+        with patch('OAuth.frienden.read_identity', return_value=self.identity):
+            self.assertEqual(self.finish(self.owner, self.start(self.owner)['state']).status_code, 200)
+            self.assertEqual(self.finish(self.other, self.start(self.other)['state']).status_code, 409)
+        with patch('OAuth.frienden.read_identity', return_value={**self.identity, 'sub': 'sermo:2:123'}):
+            self.assertEqual(self.finish(self.owner, self.start(self.owner)['state']).status_code, 409)
+        self.assertEqual(FriendenBinding.objects.get().subject, self.identity['sub'])
+
+    def test_unlink_invalidates_inflight_exchange(self):
+        def unlink_during_exchange(*args):
+            self.client.delete(self.binding, **self.headers(self.owner))
+            return self.identity
+
+        flow = self.start(self.owner)
+        with patch('OAuth.frienden.read_identity', side_effect=unlink_during_exchange):
+            self.assertEqual(self.finish(self.owner, flow['state']).status_code, 400)
+        self.assertFalse(FriendenBinding.objects.exists())
