@@ -106,6 +106,30 @@ class WorkspaceTests(TestCase):
         self.assertEqual(self.client.delete('/api/res/subdir?within=subdir', **owner).status_code, 200)
         delete_object.assert_called_once_with(self.readme.dlpath)
 
+    @patch('Base.jtoken.SECRET_KEY', 'local-tests-only-test-signing-key')
+    @patch('Base.jtoken.JWT_ENCODE_ALGO', 'HS256')
+    def test_picker_session_is_read_only_and_scoped_to_the_signed_in_account(self):
+        owner = self.login_headers(self.owner)
+        visitor = self.login_headers(self.visitor)
+        session = '/api/picker/session'
+        files = '/api/picker/files'
+        share = '/api/picker/share'
+        self.assertEqual(self.client.post(session, {}, content_type='application/json').status_code, 401)
+        response = self.client.post(session, {}, content_type='application/json', **owner)
+        self.assertEqual(response.status_code, 200, response.content)
+        ticket = response.json()['body']['ticket']
+        bearer = {'HTTP_AUTHORIZATION': f'Bearer {ticket}'}
+        response = self.client.get(files, {'q': '使用说明'}, **bearer)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual([item['id'] for item in response.json()['body']['entries']], ['readme'])
+        self.assertEqual(self.client.get(files, {'resource': self.outside.res_str_id}, **bearer).status_code, 403)
+        payload = {'ticket': ticket, 'resource_id': self.readme.res_str_id}
+        self.assertEqual(self.client.post(share, payload, content_type='application/json', **bearer).status_code, 401)
+        self.assertEqual(self.client.post(share, payload, content_type='application/json', **visitor).status_code, 401)
+        self.assertEqual(self.client.post(share, payload, content_type='application/json', **owner).status_code, 200)
+        with patch('Resource.picker.TICKET_AGE', -1):
+            self.assertEqual(self.client.get(files, **bearer).status_code, 401)
+
     @patch('Resource.workspace.text_preview', return_value={'text': '# 使用说明', 'truncated': False})
     @patch('Resource.workspace.qn_res_manager.get_resource_url', return_value='https://storage.example/object')
     def test_preview_uses_same_scope_as_listing_and_download(self, sign, read):
