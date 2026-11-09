@@ -11,6 +11,7 @@ from Base.qn_manager import qn_res_manager, QnManager
 from Resource.models import Resource, RtypeChoice, StypeChoice
 from Resource.params import ResourceParams
 from Resource.validators import ResourceErrors
+from Resource.workspace import path_to
 from User.models import User
 from User.params import UserParams
 
@@ -71,14 +72,21 @@ class BaseView(View):
 
     @analyse.argument(ResourceParams.resource_getter)
     @Auth.require_owner
+    @transaction.atomic
     def delete(self, request: Request, **kwargs):
         """ DELETE /api/res/:slug
 
         删除资源
         """
-        resource: Resource = request.argument.resource
+        User.objects.select_for_update().get(pk=request.user.pk)
+        resource = Resource.get_by_id(request.argument.resource.res_str_id)
+        within = request.GET.get('within')
+        if within:
+            root = Resource.get_by_id(within)
+            if not root.belong(request.user) or not path_to(resource, root):
+                raise ResourceErrors.DELETE_OUTSIDE_DIRECTORY
 
-        if resource.parent_id == Resource.ROOT_ID:
+        if resource.pk == Resource.ROOT_ID or resource.parent_id == Resource.ROOT_ID:
             raise ResourceErrors.DELETE_ROOT_FOLDER
 
         resource.remove()

@@ -87,6 +87,25 @@ class WorkspaceTests(TestCase):
         self.assertEqual(self.client.get(self.share_url(), {'resource': 'readme'}).status_code, 403)
         self.assertEqual(self.client.get(self.share_url(file_share)).status_code, 200)
 
+    @patch('Base.jtoken.SECRET_KEY', 'local-tests-only-test-signing-key')
+    @patch('Base.jtoken.JWT_ENCODE_ALGO', 'HS256')
+    @patch('Base.qn_manager.qn_res_manager.delete_res')
+    def test_scoped_delete_refuses_moved_resource(self, delete_object):
+        owner = self.login_headers(self.owner)
+        target = '/api/res/readme?within=subdir'
+
+        self.assertEqual(self.client.delete('/api/res/subdir?within=subdir', **owner).status_code, 403)
+        response = self.client.put('/api/res/readme', {'parent_str_id': 'delivr'},
+                                   content_type='application/json', **owner)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.delete(target, **owner).status_code, 403)
+        self.assertTrue(Resource.objects.filter(pk=self.readme.pk).exists())
+        delete_object.assert_not_called()
+
+        self.assertEqual(self.client.delete('/api/res/readme?within=delivr', **owner).status_code, 200)
+        self.assertEqual(self.client.delete('/api/res/subdir?within=subdir', **owner).status_code, 200)
+        delete_object.assert_called_once_with(self.readme.dlpath)
+
     @patch('Resource.workspace.text_preview', return_value={'text': '# 使用说明', 'truncated': False})
     @patch('Resource.workspace.qn_res_manager.get_resource_url', return_value='https://storage.example/object')
     def test_preview_uses_same_scope_as_listing_and_download(self, sign, read):

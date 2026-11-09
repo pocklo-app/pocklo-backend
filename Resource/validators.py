@@ -7,6 +7,7 @@ class ResourceErrors:
     NOT_ALLOWED_COVER_SELF_OF_NOT_IMAGE = Error("不允许非图片资源设置封面为自身", code=Code.Forbidden)
     NOT_ALLOWED_COVER_UPLOAD = Error("不允许封面类型直接修改为本地上传类型", code=Code.Forbidden)
 
+    DELETE_OUTSIDE_DIRECTORY = Error("资源已移出待删除目录，请刷新后重试", code=Code.Forbidden)
     DELETE_ROOT_FOLDER = Error("无法删除用户根目录", code=Code.Forbidden)
     RESOURCE_CIRCLE = Error("不允许资源关系成环", code=Code.Forbidden)
 
