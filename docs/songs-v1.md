@@ -152,7 +152,7 @@ Frienden 的改动边界为透传新字段、按 type 渲染音乐卡片、读�
 
 | 方法与路径 | 输入或输出 |
 | --- | --- |
-| GET /api/audio/<resource_id>/metadata | status 为 pending/parsing/ready/failed，extracted、has_embedded_cover、song |
+| GET /api/audio/<resource_id>/metadata | status 为 pending/parsing/ready/failed，extracted、has_embedded_cover、cover_preview_url、song |
 | POST /api/audio/<resource_id>/metadata | 重试失败解析 |
 | POST /api/songs/ | 至少 audio_resource_id，默认带入解析结果，歌名兜底文件名 |
 | GET /api/songs/<song_id> | 当前契约 |
@@ -228,3 +228,5 @@ Frienden 音乐卡片与播放器仍需对方按此契约接入。
 
 
 生产任务使用 pocklo-song-metadata.timer 和 pocklo-song-cleanup.timer，每分钟运行且避免同一任务重叠，可用 systemctl 与 journalctl 查看状态。迁移前数据库备份保存在服务器账号的私有备份目录。部署提交为后端 20cbb10、前端 4dcb3b8（此处不包含后续文档提交）。
+
+歌曲编辑器的 cover_preview_url 是仅所有者可获取的 300 秒封面预览地址，供编辑时显示已有封面，不应持久保存。

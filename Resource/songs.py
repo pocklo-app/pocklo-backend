@@ -163,8 +163,12 @@ class AudioSuggestions(SongView):
             schedule(audio)
             metadata = AudioMetadata.objects.get(audio=audio)
         song = Song.objects.filter(audio=audio).first()
+        artwork = SongCover.objects.filter(metadata=metadata, ready=True).first()
+        cover_key = song.cover.dlpath if song and song.cover_id else (
+            artwork.storage_key if artwork and (not song or song.use_embedded_cover) else None)
         return reply({'status': metadata.status, 'extracted': metadata.data,
-                      'has_embedded_cover': SongCover.objects.filter(metadata=metadata, ready=True).exists(),
+                      'has_embedded_cover': bool(artwork),
+                      'cover_preview_url': qn_res_manager.get_resource_url(cover_key, expires=TTL) if cover_key else None,
                       'song': contract(song) if song else None})
 
     def post(self, request, resource_id):
