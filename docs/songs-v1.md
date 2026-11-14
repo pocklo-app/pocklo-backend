@@ -1,6 +1,6 @@
 # Pocklo 单首歌曲接入契约 v1
 
-本地实现，部署须确认。后端使用 Python 3.11 或更高版本。生产 API 基址为 https://disk.6-79.cn ，规范分享页为 https://pocklo.jyonn.space/share/<token> 。本次未修改 Frienden 仓库。
+已于 2026-11-14 部署歌曲能力。后端使用 Python 3.11 或更高版本。生产 API 基址为 https://disk.6-79.cn ，规范分享页为 https://pocklo.jyonn.space/share/<token> 。本次未修改 Frienden 仓库。
 
 ## 双方边界
 
@@ -184,7 +184,7 @@ Mutagen 解析 ID3 v1/v2.2/v2.3/v2.4，保留标签提供的歌手数组，不�
 
 派生封面保存在既有私有桶的 disk/song-covers/<uuid>.jpg，单独 SongCover 记录，不出现在用户目录列表。只由合法歌曲播放请求签发访问地址。音频删除后派生记录脱离源对象，提交后尝试清理，失败保留 DB 引用供重试。已有自选封面保留普通资源身份，删除歌曲不会误删其原图。
 
-部署批准后需要迁移和定时调度，本次未安装生产调度：
+生产已执行迁移，并配置以下两个管理命令每分钟运行：
 
     python manage.py migrate
     python manage.py process_audio_metadata
@@ -196,7 +196,7 @@ Mutagen 解析 ID3 v1/v2.2/v2.3/v2.4，保留标签提供的歌手数组，不�
 
     python manage.py verify_song_cdn --token <有效歌曲分享token> --origin https://frienden.jyonn.space
 
-核对 audio MIME、Range 请求的 206/Content-Range、消费 origin 的 CORS。CDN 应暴露 Accept-Ranges、Content-Range、Content-Length，禁止破坏字节偏移的压缩。Frienden 的每个实际镜像 origin 都须验收。本次未向生产私有桶上传联调文件，也未更改生产 CDN 配置，本地模拟结果不代表生产配置已通过。
+核对 audio MIME、Range 请求的 206/Content-Range、消费 origin 的 CORS。CDN 应暴露 Accept-Ranges、Content-Range、Content-Length，禁止破坏字节偏移的压缩。Frienden 的每个实际镜像 origin 都须验收。生产已使用临时生成的静音 MP3 验证私有 CDN，音频及派生封面验证后清理。
 
 ## 可运行联调样例
 
@@ -209,7 +209,7 @@ Mutagen 解析 ID3 v1/v2.2/v2.3/v2.4，保留标签提供的歌手数组，不�
 
 打开 http://localhost:8000/__song_demo ，本地按钮登录隔离账号并进入歌曲编辑界面。匿名分享 token、真实 ID 和完整契约在启动日志及 /tmp/pocklo-song-demo/song.json。demo.mp3 是本地生成的约 20 秒静音 MPEG 文件，可验证完整播放，无外部歌曲版权依赖。
 
-生产 CDN 配置、真实 MP3 和实际 Frienden 站点的联合验收仍是部署后的检查项。
+Frienden 音乐卡片与播放器仍需对方按此契约接入。
 
 联调 CDN 在 4 秒后过期，便于测试错误刷新；生产契约仍为 300 秒。该服务仅监听本机，不能当生产部署脚本使用。重新启动会复用歌曲并补建已撤销的样例分享。
 
@@ -224,4 +224,7 @@ Mutagen 解析 ID3 v1/v2.2/v2.3/v2.4，保留标签提供的歌手数组，不�
 
 28 个后端测试通过。Chrome 使用真实本地 Django 与隔离 SQLite，验证编辑器自动填入信息、保存后版本增加、匿名 MP3 播放到结尾、进度拖动、模拟 CDN 的跨域 206、过期 403 后重取，以及撤销后停止签发。另验证 390×844 手机视口的浅色/深色歌曲页和居中可滚动编辑器。
 
-前端生产构建和开发构建通过，迁移状态检查无遗漏。生产 CDN、真实公开域名和 Frienden 音乐卡片尚未联合验收。此功能未部署，未改生产数据库、存储权限、CDN 配置或 Frienden 仓库。
+前端生产构建和开发构建通过，迁移状态检查无遗漏。生产前后端已发布，新增数据库迁移已执行。使用临时生成的静音 MP3 验证自动解析、派生封面、匿名接口、真实私有 CDN 的 audio/mpeg、206 和五个消费 origin 的跨域响应。过期签名及无签名访问均返回 401，撤销后新播放请求返回 404，已签发地址在剩余有效期内仍可用。测试账号、文件、封面与分享已清理。Frienden 仓库本次未修改，其音乐卡片和播放器仍需接入。
+
+
+生产任务使用 pocklo-song-metadata.timer 和 pocklo-song-cleanup.timer，每分钟运行且避免同一任务重叠，可用 systemctl 与 journalctl 查看状态。迁移前数据库备份保存在服务器账号的私有备份目录。部署提交为后端 20cbb10、前端 4dcb3b8（此处不包含后续文档提交）。
