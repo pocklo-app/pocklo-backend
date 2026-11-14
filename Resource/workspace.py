@@ -35,6 +35,11 @@ def reply(body):
 
 
 def share_info(share):
+    if share.song_id:
+        from Resource.songs import contract
+        return {'token': str(share.token), 'resource_id': share.song.audio.res_str_id if share.song.audio_id else None,
+                'name': share.song.title, 'folder': False, 'created_at': share.created_at.isoformat(),
+                'type': 'song', 'song': contract(share.song, share)}
     return {
         'token': str(share.token),
         'resource_id': share.resource.res_str_id,
@@ -46,7 +51,7 @@ def share_info(share):
 
 def get_share(token):
     try:
-        return Share.objects.select_related('resource').get(token=token)
+        return Share.objects.select_related('resource', 'song__audio', 'song__cover').get(token=token)
     except Share.DoesNotExist:
         raise WorkspaceErrors.SHARE_NOT_FOUND
 
@@ -76,6 +81,8 @@ class WorkspaceAccess:
         return bool(not self.share and self.user and resource.belong(self.user))
 
     def path(self, resource):
+        if self.share and self.share.song_id:
+            return [resource] if resource.pk == self.share.song.audio_id else []
         return path_to(resource, self.share.resource if self.share else None)
 
     def allows(self, resource):
@@ -119,6 +126,10 @@ def entry(resource):
         'created_at': resource.create_time.isoformat(),
         'thumbnail': thumbnail,
     }
+    song = getattr(resource, 'song', None)
+    if song:
+        result['type'] = 'song'
+        result['song'] = {'song_id': str(song.uid), 'version': song.revision, 'title': song.title}
     return result
 
 
@@ -189,7 +200,7 @@ class WorkspaceView(View):
 class ShareCollectionView(View):
     @Auth.require_login
     def get(self, request):
-        shares = Share.objects.filter(resource__owner=request.user).select_related('resource')
+        shares = Share.objects.filter(Q(resource__owner=request.user) | Q(song__owner=request.user)).select_related('resource', 'song__audio', 'song__cover')
         return reply({'links': [share_info(share) for share in shares.order_by('-created_at', '-pk')]})
 
     @Auth.require_login
@@ -198,13 +209,17 @@ class ShareCollectionView(View):
         resource = request.json.resource
         if not resource.belong(request.user) or resource.pk == Resource.ROOT_ID:
             raise ResourceErrors.RESOURCE_NOT_BELONG
-        return reply(share_info(Share.objects.create(resource=resource)))
+        from Resource.songs import create_share
+        return reply(share_info(create_share(resource)))
 
 
 class ShareView(View):
     @Auth.maybe_login
     def get(self, request, token):
         share = get_share(token)
+        if share.song_id:
+            from Resource.songs import contract
+            return reply({'type': 'song', 'song': contract(share.song, share)})
         resource_id = request.GET.get('resource')
         resource = Resource.get_by_id(resource_id) if resource_id else share.resource
         return workspace(request, resource, WorkspaceAccess(request, share))
@@ -212,7 +227,7 @@ class ShareView(View):
     @Auth.require_login
     def delete(self, request, token):
         share = get_share(token)
-        if not share.resource.belong(request.user):
+        if (share.song.owner_id if share.song_id else share.resource.owner_id) != request.user.pk:
             raise ResourceErrors.RESOURCE_NOT_BELONG
         share.delete()
         return reply(None)

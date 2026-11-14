@@ -363,5 +363,46 @@ class Share(models.Model):
     """A revocable link scoped to one resource and its current descendants."""
 
     token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
-    resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='shares')
+    resource = models.ForeignKey(Resource, null=True, on_delete=models.CASCADE, related_name='shares')
+    song = models.ForeignKey('Song', null=True, blank=True, on_delete=models.CASCADE, related_name='shares')
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.CheckConstraint(
+            condition=(models.Q(resource__isnull=False, song__isnull=True) |
+                       models.Q(resource__isnull=True, song__isnull=False)),
+            name='share_exactly_one_target')]
+
+
+class AudioMetadata(models.Model):
+    """Extraction is a suggestion, never an automatic song classification."""
+    audio = models.OneToOneField(Resource, on_delete=models.CASCADE, related_name='audio_metadata')
+    status = models.CharField(max_length=16, default='pending')
+    data = models.JSONField(default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class Song(models.Model):
+    uid = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    owner = models.ForeignKey(User, on_delete=models.CASCADE)
+    audio = models.OneToOneField(Resource, null=True, on_delete=models.SET_NULL, related_name='song')
+    revision = models.PositiveIntegerField(default=1)
+    title = models.CharField(max_length=256)
+    artists = models.JSONField(default=list)
+    album = models.CharField(max_length=256, blank=True)
+    duration_ms = models.PositiveIntegerField(null=True)
+    # A user-selected image remains a normal private resource.
+    cover = models.ForeignKey(Resource, null=True, blank=True, on_delete=models.SET_NULL, related_name='song_covers')
+    use_embedded_cover = models.BooleanField(default=True)
+    lyrics_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    lyrics = models.JSONField(default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class SongCover(models.Model):
+    """Derived artwork in the existing private disk/ namespace."""
+    uid = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    metadata = models.OneToOneField(AudioMetadata, null=True, on_delete=models.SET_NULL, related_name='artwork')
+    storage_key = models.CharField(max_length=256, unique=True)
+    mime = models.CharField(max_length=32)
+    ready = models.BooleanField(default=False)

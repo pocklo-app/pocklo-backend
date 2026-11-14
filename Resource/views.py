@@ -184,6 +184,7 @@ class TokenView(View):
 
     @analyse.json(UserParams.user_getter, 'fsize', 'fname', 'ftype', 'key')
     @analyse.argument(ResourceParams.resource_getter)
+    @transaction.atomic
     def post(self, request: Request, **kwargs):
         """ POST /api/res/:res_str_id/token
 
@@ -212,7 +213,12 @@ class TokenView(View):
         if parent.rtype != RtypeChoice.FOLDER:
             raise ResourceErrors.REQUIRE_FOLDER
 
+        User.objects.select_for_update().get(pk=user.pk)
         decode_fname = QnManager.decode_key(fname)
+        stored_key = '%s/%s' % (key[:key.rfind('/')], decode_fname) if fname != decode_fname else key
+        existing = Resource.objects.filter(owner=user, dlpath=stored_key).first()
+        if existing:
+            return existing.d_child()
         if fname != decode_fname:
             new_key = '%s/%s' % (key[:key.rfind('/')], decode_fname)
             qn_res_manager.move_res(key, new_key)
@@ -220,6 +226,14 @@ class TokenView(View):
             key = new_key
 
         resource = Resource.create_file(fname, user, parent, key, fsize, sub_type, ftype)
+        # Metadata is optional and never changes upload success.
+        try:
+            from Resource.song_metadata import schedule
+            with transaction.atomic():
+                schedule(resource)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning('Could not schedule audio extraction for resource %s', resource.pk)
         return resource.d_child()
 
 

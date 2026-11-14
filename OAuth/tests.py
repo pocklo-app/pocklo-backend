@@ -155,6 +155,30 @@ class ProviderTests(TestCase):
         Share.objects.all().delete()
         self.assertEqual(self.client.post(BASE + 'shares/', payload, content_type='application/json', **auth).status_code, 410)
 
+    def test_song_files_metadata_and_scoped_share_retry(self):
+        from Resource.models import Song
+        self.file.rtype = RtypeChoice.FILE
+        self.file.sub_type = StypeChoice.MUSIC
+        self.file.mime = 'audio/mpeg'
+        self.file.save()
+        song = Song.objects.create(owner=self.owner, audio=self.file, title='Song')
+        app = self.register(request_sharing=True).json()
+        Application.objects.filter(client_id=app['application']['client_id']).update(review='approved')
+        tokens = self.exchange(app, self.consent(app, 'files.read shares.create')['code'][0]).json()
+        auth = self.bearer(tokens)
+        listing = self.client.get(BASE + 'files/', **auth).json()
+        self.assertEqual(listing['entries'][0]['type'], 'song')
+        self.assertEqual(self.client.get(BASE + f'songs/{song.uid}/', **auth).json()['song_id'], str(song.uid))
+        auth['HTTP_IDEMPOTENCY_KEY'] = 'song-once'
+        first = self.client.post(BASE + 'shares/', {'resource_id': self.file.res_str_id},
+                                 content_type='application/json', **auth)
+        self.assertEqual(first.status_code, 201, first.content)
+        self.assertEqual(first.json()['type'], 'song')
+        again = self.client.post(BASE + 'shares/', {'resource_id': self.file.res_str_id},
+                                 content_type='application/json', **auth)
+        self.assertEqual(again.json()['url'], first.json()['url'])
+        self.assertIsNone(Share.objects.get(token=first.json()['token']).resource_id)
+
     def test_refresh_replay_cannot_revoke_a_later_authorization(self):
         app = self.register().json()
         old = self.exchange(app, self.consent(app)['code'][0]).json()

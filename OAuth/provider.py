@@ -543,7 +543,19 @@ class Shares(ProviderView):
                 raise OAuthError('share_revoked', 410)
             share = previous.share
         else:
-            share = Share.objects.create(resource=resource_for(grant, resource_id))
+            from Resource.songs import create_share
+            share = create_share(resource_for(grant, resource_id))
             ShareCreation.objects.create(grant=grant, key_hash=key_hash, resource_id_at_creation=resource_id, share=share)
         return response({**share_info(share), 'url': f'{settings.POCKLO_OAUTH_WEB_ORIGIN}/share/{share.token}'},
                         200 if previous else 201)
+
+
+class SongMetadata(ProviderView):
+    def get(self, request, uid):
+        from Resource.models import Song
+        from Resource.songs import contract
+        grant = bearer_grant(request, READ)
+        song = Song.objects.filter(uid=uid, owner_id=grant.user_id).first()
+        if not song:
+            raise OAuthError('song_not_found', 404)
+        return response(contract(song))

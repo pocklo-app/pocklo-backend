@@ -26,6 +26,7 @@ urlpatterns = [
     path('frienden-account/', provider.FriendenAccount.as_view()),
     path('grants/', provider.OwnerGrants.as_view()),
     path('grants/<uuid:uid>/', provider.OwnerGrant.as_view()),
+    path('songs/<uuid:uid>/', provider.SongMetadata.as_view()),
     path('files/', provider.Files.as_view()),
     path('files/<str:resource_id>/', provider.Files.as_view()),
     path('files/<str:resource_id>/download/', provider.Download.as_view()),

@@ -63,4 +63,5 @@ class PickerShare(View):
         if not isinstance(request.json.resource_id, str) or not request.json.resource_id:
             raise ResourceErrors.RESOURCE_NOT_FOUND
         resource = picker_resource(request.user, request.json.resource_id)
-        return reply(share_info(Share.objects.create(resource=resource)))
+        from Resource.songs import create_share
+        return reply(share_info(create_share(resource)))

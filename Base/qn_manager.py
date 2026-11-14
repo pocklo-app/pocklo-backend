@@ -103,7 +103,7 @@ class QnManager:
             return self.auth.private_download_url(url, expires=expires)
 
     @staticmethod
-    def deal_manage_res(target, access_token):
+    def deal_manage_res(target, access_token, accepted=(200,)):
         url = '%s%s' % (QINIU_MANAGE_HOST, target)
         headers = {
             'Content-Type': 'application/json',
@@ -116,19 +116,19 @@ class QnManager:
             raise QNErrors.REQUEST_QINIU
         status = r.status_code
         r.close()
-        if status == 200:
+        if status in accepted:
             return
         elif status == 401:
             raise QNErrors.QINIU_UNAUTHORIZED
         else:
             raise QNErrors.FAIL_QINIU('状态错误%s' % status)
 
-    def delete_res(self, key):
+    def delete_res(self, key, missing_ok=False):
         entry = '%s:%s' % (self.bucket, key)
         encoded_entry = urlsafe_base64_encode(entry)
         target = '/delete/%s' % encoded_entry
         access_token = self.auth.token_of_request(target, content_type='application/json')
-        return self.deal_manage_res(target, access_token)
+        return self.deal_manage_res(target, access_token, accepted=(200, 612) if missing_ok else (200,))
 
     def move_res(self, key, new_key):
         entry = '%s:%s' % (self.bucket, key)
