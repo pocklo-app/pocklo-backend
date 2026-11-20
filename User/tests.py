@@ -4,6 +4,7 @@ from datetime import timedelta
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
+import requests
 from django.test import TestCase
 from django.utils import timezone
 
@@ -152,3 +153,31 @@ class FriendenBindingTests(TestCase):
             self.assertEqual(self.finish_login(flow).status_code, 400)
             exchange.assert_called_once()
         self.assertFalse(FriendenBinding.objects.exists())
+
+    def test_cli_exchange_uses_bound_frienden_grant_and_existing_phone_account(self):
+        FriendenBinding.objects.create(user=self.owner, subject=self.identity['sub'], phone=self.identity['phone'])
+        uri = '/api/oauth/frienden/cli/exchange'
+        code, verifier = 'c' * 43, 'v' * 43
+        grant = {'access_token': 'synthetic-token'}
+        with patch('OAuth.frienden.provider', side_effect=[
+            grant, {**self.identity, 'sub': 'sermo:21:456'}, {},
+            requests.HTTPError('Code already used'),
+        ]) as provider:
+            bad = self.client.post(uri, {'code': code, 'code_verifier': 'short'},
+                                   content_type='application/json')
+            self.assertEqual(bad.status_code, 400)
+            provider.assert_not_called()
+            payload = {'code': code, 'code_verifier': verifier}
+            response = self.client.post(uri, payload, content_type='application/json')
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()['body']['user']['user_id'], self.owner.pk)
+            self.assertIn('no-store', response['Cache-Control'])
+            self.assertNotIn(grant['access_token'], response.content.decode())
+            self.assertNotIn(self.identity['phone'], response.content.decode())
+            self.assertEqual(self.client.get('/api/user/', HTTP_TOKEN=response.json()['body']['token']).status_code, 200)
+            self.assertEqual(self.client.post(uri, payload, content_type='application/json').status_code, 502)
+        provider.assert_any_call('POST', 'token', form={
+            'grant_type': 'authorization_code', 'client_id': 'pocklo',
+            'redirect_uri': 'https://pocklo.jyonn.space/oauth/frienden/callback',
+            'code': code, 'code_verifier': verifier,
+        })

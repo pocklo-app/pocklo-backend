@@ -24,6 +24,7 @@ CALLBACK = 'https://pocklo.jyonn.space/oauth/frienden/callback'
 AUTHORIZE = 'https://frienden.jyonn.space/oauth/authorize'
 PROVIDER = 'https://api.sermo.jyonn.space/users/oauth/'
 STATE = re.compile(r'[A-Za-z0-9_-]{43}')
+PKCE_VERIFIER = re.compile(r'[A-Za-z0-9._~-]{43,128}')
 SUBJECT = re.compile(r'sermo:[0-9]+:[0-9]+')
 PHONE = re.compile(r'\+861[3-9][0-9]{9}')
 
@@ -210,9 +211,13 @@ class FriendenLoginCompleteView(View):
         if not verifier or not flow.delete()[0]:
             return reply(message='授权已失效，请重新登录。', status=400)
 
+        return self.complete(code, verifier)
+
+    @classmethod
+    def complete(cls, code, verifier):
         try:
             subject, phone = verified_identity(code, verifier)
-            user = self.account(subject, phone)
+            user = cls.account(subject, phone)
         except FriendenIdentityError as error:
             return reply(message=str(error), status=error.status)
         return reply(Auth.get_login_token(user))
@@ -237,3 +242,14 @@ class FriendenLoginCompleteView(View):
             if binding:
                 return binding.user
             raise FriendenIdentityError('暂时无法建立手机号映射，请重新登录。', 409) from None
+
+
+class FriendenCliLoginView(FriendenLoginCompleteView):
+    @analyse.json(Validator('code', '授权码'), Validator('code_verifier', 'PKCE 校验码'))
+    def post(self, request):
+        code, verifier = request.json.code, request.json.code_verifier
+        if (not isinstance(code, str) or not STATE.fullmatch(code)
+                or not isinstance(verifier, str) or not PKCE_VERIFIER.fullmatch(verifier)):
+            return reply(message='终端授权回调无效，请重新登录。', status=400)
+        # Frienden checks the registered client, callback and PKCE verifier and consumes the code once.
+        return self.complete(code, verifier)
