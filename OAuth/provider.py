@@ -25,7 +25,7 @@ from OAuth.frienden import PHONE
 from OAuth.models import Application, AuthorizationRequest, Credential, Grant, ShareCreation
 from Resource.models import Resource, Share
 from Resource.validators import RtypeChoice
-from Resource.workspace import entry, search, share_info
+from Resource.workspace import ENTRY_RELATIONS, entry, search, share_info
 from User.models import FriendenBinding
 
 
@@ -499,6 +499,7 @@ class Files(ProviderView):
                     raise OAuthError('invalid_offset')
                 offset = int(offset)
                 rows = list(Resource.objects.filter(parent=resource, owner_id=grant.user_id)
+                            .select_related(*ENTRY_RELATIONS)
                             .exclude(pk=Resource.ROOT_ID).order_by('rname', 'pk')[offset:offset + 101])
                 result['entries'] = [entry(child) for child in rows[:100]]
                 result['has_more'] = len(rows) > 100

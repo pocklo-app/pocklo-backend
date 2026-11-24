@@ -110,12 +110,12 @@ def preview_type(resource):
         return 'pdf'
     if mime == 'text/markdown' or name.endswith(('.md', '.markdown', '.mdown')):
         return 'markdown'
-    if mime.startswith('text/') or name.endswith(('.txt', '.log', '.csv')):
+    if mime.startswith('text/') or name.endswith(('.txt', '.log', '.csv', '.lrc')):
         return 'text'
     return None
 
 
-def entry(resource):
+def entry(resource, include_song_art=True):
     thumbnail = resource.get_cover_urls()[1]
     result = {
         'id': resource.res_str_id,
@@ -130,6 +130,16 @@ def entry(resource):
     if song:
         result['type'] = 'song'
         result['song'] = {'song_id': str(song.uid), 'version': song.revision, 'title': song.title}
+        if include_song_art:
+            if song.cover_id:
+                key = song.cover.dlpath
+            else:
+                metadata = getattr(resource, 'audio_metadata', None) if song.use_embedded_cover else None
+                artwork = getattr(metadata, 'artwork', None)
+                key = artwork.storage_key if artwork and artwork.ready else None
+            if key:
+                result['thumbnail'] = qn_res_manager.get_resource_url(
+                    key, expires=3600, operation='imageView2/1/w/192/h/192')
     return result
 
 
@@ -137,7 +147,10 @@ def children(resource):
     return Resource.objects.filter(parent=resource, owner_id=resource.owner_id).order_by('rname', 'pk')
 
 
-def search(resource, query):
+ENTRY_RELATIONS = ('song__cover', 'audio_metadata__artwork')
+
+
+def search(resource, query, include_song_art=True):
     """Walk only visible directories and stop once a page of matches is found."""
     folders = [(resource.pk, '')]
     seen = {resource.pk}
@@ -149,6 +162,7 @@ def search(resource, query):
         while batch := dict(islice(level, 128)):
             rows = (
                 Resource.objects.filter(parent_id__in=batch, owner_id=resource.owner_id)
+                .select_related(*ENTRY_RELATIONS)
                 .filter(Q(rtype=RtypeChoice.FOLDER) | name_match)
                 .annotate(name_matches=Case(When(name_match, then=Value(True)), default=Value(False)))
                 .order_by('parent_id', 'rname', 'pk')
@@ -160,7 +174,7 @@ def search(resource, query):
                 if child.name_matches:
                     if len(matches) == SEARCH_LIMIT:
                         return matches, True
-                    matches.append({**entry(child), 'location': relative_path})
+                    matches.append({**entry(child, include_song_art), 'location': relative_path})
                 if child.rtype == RtypeChoice.FOLDER:
                     seen.add(child.pk)
                     next_level.append((child.pk, '/'.join(filter(None, (relative_path, child.rname)))))
@@ -170,18 +184,19 @@ def search(resource, query):
 
 def workspace(request, resource, access):
     access.require(resource)
+    include_song_art = access.owns(resource)
     query = request.GET.get('q', '').strip()
     entries = []
     has_more = False
     if resource.rtype == RtypeChoice.FOLDER:
         if query:
-            entries, has_more = search(resource, query[:256])
+            entries, has_more = search(resource, query[:256], include_song_art)
         else:
-            visible = list(children(resource))
+            visible = list(children(resource).select_related(*ENTRY_RELATIONS))
             visible.sort(key=lambda child: child.rtype != RtypeChoice.FOLDER)
-            entries = [entry(child) for child in visible]
+            entries = [entry(child, include_song_art) for child in visible]
     return reply({
-        'resource': entry(resource),
+        'resource': entry(resource, include_song_art),
         'entries': entries,
         'breadcrumbs': [{'id': item.res_str_id, 'name': item.rname} for item in access.path(resource)],
         'can_manage': access.owns(resource),

@@ -174,7 +174,7 @@ Frienden 的改动边界为透传新字段、按 type 渲染音乐卡片、读�
 
 其他可更新字段有 duration_ms、audio_resource_id。cover_resource_id 为本人的 PNG/JPEG/WebP 普通资源，null 清除自选封面，再由 use_embedded_cover 决定是否使用内嵌封面。lyrics 编辑接受 none/text/lrc，保留内嵌 synchronized 时省略 lyrics。规范化 cues 由服务端生成。
 
-编辑器可导入已有音频内嵌结果、上传补充封面、导入 LRC/纯文本、上传替换音频或选择已有音频资源 ID。解析失败或等待时可以手动填写，不要求重复上传内嵌内容。
+编辑器支持内嵌同步歌词和 LRC。用户可从设备拖入 LRC，或从当前目录开始选择已上传的 LRC。导入时复制歌词内容到歌曲，原文件移动或删除后仍可播放歌词。历史歌曲的纯文本歌词仍可读取。封面可从设备选择或拖入，也可以使用音频的内嵌封面。
 
 ## 解析与素材清理
 

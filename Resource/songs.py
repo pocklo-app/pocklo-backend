@@ -149,8 +149,11 @@ def apply(song, data):
         value = data['lyrics']
         if not isinstance(value, dict):
             fail('invalid_lyrics')
+        kind, text = value.get('type', 'none'), value.get('text', '')
+        if not isinstance(text, str) or kind not in ('lrc', 'none') or (kind == 'none' and text != ''):
+            fail('invalid_lyrics')
         try:
-            song.lyrics = lyrics_data(value.get('text', ''), value.get('type', 'none'))
+            song.lyrics = lyrics_data(text, kind)
         except (ValueError, TypeError):
             fail('invalid_lyrics')
 
@@ -164,11 +167,13 @@ class AudioSuggestions(SongView):
             metadata = AudioMetadata.objects.get(audio=audio)
         song = Song.objects.filter(audio=audio).first()
         artwork = SongCover.objects.filter(metadata=metadata, ready=True).first()
-        cover_key = song.cover.dlpath if song and song.cover_id else (
-            artwork.storage_key if artwork and (not song or song.use_embedded_cover) else None)
+        embedded_url = qn_res_manager.get_resource_url(artwork.storage_key, expires=TTL) if artwork else None
+        cover_url = embedded_url if not song or song.use_embedded_cover else None
+        if song and song.cover_id and song.cover.dlpath:
+            cover_url = qn_res_manager.get_resource_url(song.cover.dlpath, expires=TTL)
         return reply({'status': metadata.status, 'extracted': metadata.data,
                       'has_embedded_cover': bool(artwork),
-                      'cover_preview_url': qn_res_manager.get_resource_url(cover_key, expires=TTL) if cover_key else None,
+                      'cover_preview_url': cover_url, 'embedded_cover_url': embedded_url,
                       'song': contract(song) if song else None})
 
     def post(self, request, resource_id):
@@ -190,9 +195,11 @@ class Songs(SongView):
             fail('audio_already_has_song', 409)
         metadata = AudioMetadata.objects.filter(audio=audio, status='ready').first()
         extracted = metadata.data if metadata else {}
+        lyrics = extracted.get('lyrics') or {}
         song = Song(owner=user, audio=audio, title=extracted.get('title') or audio.rname.rsplit('.', 1)[0],
                     artists=extracted.get('artists', []), album=extracted.get('album', ''),
-                    duration_ms=extracted.get('duration_ms'), lyrics=extracted.get('lyrics', lyrics_data('')))
+                    duration_ms=extracted.get('duration_ms'),
+                    lyrics=lyrics if lyrics.get('type') in ('lrc', 'synchronized') else lyrics_data(''))
         apply(song, data)
         song.save()
         return reply(contract(song))

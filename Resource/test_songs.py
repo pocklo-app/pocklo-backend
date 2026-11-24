@@ -99,6 +99,7 @@ class SongTests(TestCase):
         other_audio = self.resource('not-song', parent=self.root, mime='audio/mpeg')
         self.assertNotIn('song', entry(other_audio))
         self.assertEqual(self.put({'version':1, 'lyrics':{'type':'lrc','text':'bad'}}).status_code, 400)
+        self.assertEqual(self.put({'version':1, 'lyrics':{'type':'text','text':'Plain lyrics'}}).status_code, 400)
         self.assertEqual(self.put({'version':1, 'artists':'one'}).status_code, 400)
         self.assertEqual(self.put({'version':1, 'audio_resource_id':'private'}).status_code, 400)
         self.cover.owner = self.other
@@ -118,20 +119,54 @@ class SongTests(TestCase):
         audio = self.resource('new-audio', parent=self.root, mime='audio/mpeg')
         AudioMetadata.objects.create(audio=audio, status='ready', data={
             'title':'Extracted', 'artists':['One','Two'], 'album':'Album', 'duration_ms':1000,
-            'lyrics':lyrics_data('Plain lyrics')})
+            'lyrics':lyrics_data('[00:01]Lyrics', 'lrc')})
         created = self.client.post('/api/songs/', {'audio_resource_id':audio.res_str_id},
                                    content_type='application/json', **self.headers())
         self.assertEqual(created.status_code, 200, created.content)
         result = created.json()['body']
         self.assertEqual(result['title'], 'Extracted')
         self.assertEqual(result['artists'], ['One','Two'])
-        self.assertEqual(result['lyrics']['text'], 'Plain lyrics')
+        self.assertEqual(result['lyrics']['cues'], [{'time_ms': 1000, 'text': 'Lyrics'}])
         ticket = self.client.post('/api/picker/session', **self.headers()).json()['body']['ticket']
         picked = self.client.post('/api/picker/share', {'ticket':ticket,'resource_id':audio.res_str_id},
                                   content_type='application/json', **self.headers())
         self.assertEqual(picked.status_code,200,picked.content)
         self.assertEqual(picked.json()['body']['type'],'song')
         self.assertEqual(picked.json()['body']['song']['song_id'],result['song_id'])
+
+    @patch('Resource.workspace.text_preview', return_value={'text': '[00:02]Lyrics', 'truncated': False})
+    @patch('Resource.workspace.qn_res_manager.get_resource_url', return_value='https://cdn.example/file?signature=test')
+    def test_existing_lrc_resource_is_readable_only_by_owner(self, sign, preview):
+        lrc = self.resource('lyrics', self.root, mime='application/octet-stream')
+        lrc.rname = 'Lyrics.LRC'
+        lrc.save()
+        url = f'/api/res/{lrc.res_str_id}/content'
+        self.assertEqual(self.client.get(url, **self.headers(self.other)).status_code, 403)
+        preview.assert_not_called()
+        result = self.client.get(url, **self.headers()).json()['body']
+        self.assertEqual(result['kind'], 'text')
+        self.assertEqual(self.put({'version':1, 'lyrics':{'type':'lrc','text':result['text']}}).status_code, 200)
+        lrc.delete()
+        self.song.refresh_from_db()
+        self.assertEqual(self.song.lyrics['cues'], [{'time_ms': 2000, 'text': 'Lyrics'}])
+
+    @patch('Resource.workspace.qn_res_manager.get_resource_url', return_value='https://cdn.example/art?signature=test')
+    def test_song_artwork_in_owned_workspace_and_existing_share_scope(self, sign):
+        metadata = AudioMetadata.objects.create(audio=self.audio)
+        artwork = SongCover.objects.create(metadata=metadata, storage_key='disk/song-covers/test.jpg', mime='image/jpeg', ready=True)
+        url = f'/api/res/{self.root.res_str_id}/workspace'
+        def thumbnail(response):
+            return next(row['thumbnail'] for row in response.json()['body']['entries'] if row['id'] == self.audio.res_str_id)
+        self.assertEqual(thumbnail(self.client.get(url, **self.headers())), sign.return_value)
+        sign.assert_called_once_with(artwork.storage_key, expires=3600, operation='imageView2/1/w/192/h/192')
+        self.song.cover = self.cover
+        self.song.save()
+        self.assertEqual(thumbnail(self.client.get(url, {'q': 'music'}, **self.headers())), sign.return_value)
+        sign.assert_called_with(self.cover.dlpath, expires=3600, operation='imageView2/1/w/192/h/192')
+        share = Share.objects.create(resource=self.root)
+        sign.reset_mock()
+        self.assertIsNone(thumbnail(self.client.get(f'/api/shares/{share.token}')))
+        sign.assert_not_called()
 
     @patch('Resource.song_metadata.requests.get', side_effect=OSError('not available'))
     def test_extraction_failure_does_not_delete_original(self, fetch):
